@@ -118,7 +118,7 @@ class TestSignalPriority:
         assert winner.name == "critical_alert"
 
     def test_sort_order_determines_winner(self, engine, sample_lights):
-        """Sort_order alone determines which signal wins (priority field ignored)."""
+        """Sort_order alone determines which signal wins."""
         signals = [
             Signal(name="alpha", color=(255, 0, 0),
                    trigger_type="condition", template="", sort_order=2),
@@ -658,25 +658,25 @@ class TestSignalTriggerMode:
 
 
 class TestSortOrderOnly:
-    """Test that ordering is purely by sort_order, not priority field."""
+    """Test that ordering is purely by sort_order."""
 
-    def test_priority_field_ignored_for_ordering(self, engine, sample_lights):
-        """Even if priority field differs, sort_order determines winner."""
+    def test_sort_order_determines_ordering(self, engine, sample_lights):
+        """sort_order alone determines which signal wins."""
         signals = [
-            Signal(name="high_prio_but_low_order", priority=100, color=(255, 0, 0),
+            Signal(name="low_order", color=(255, 0, 0),
                    trigger_type="condition", template="", sort_order=0),
-            Signal(name="low_prio_but_high_order", priority=1, color=(0, 255, 0),
+            Signal(name="high_order", color=(0, 255, 0),
                    trigger_type="condition", template="", sort_order=1),
         ]
         engine.set_lights(sample_lights)
         engine.set_signals(signals)
 
-        engine.activate_signal("high_prio_but_low_order")
-        engine.activate_signal("low_prio_but_high_order")
+        engine.activate_signal("low_order")
+        engine.activate_signal("high_order")
 
-        # sort_order=0 wins regardless of priority field
+        # sort_order=0 wins
         winner = engine.get_global_winner()
-        assert winner.name == "high_prio_but_low_order"
+        assert winner.name == "low_order"
 
 
 # ---------------------------------------------------------------------------

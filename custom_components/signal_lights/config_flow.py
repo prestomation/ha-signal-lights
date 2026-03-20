@@ -468,16 +468,26 @@ class SignalLightsOptionsFlow(OptionsFlow):
                 self._signal_data.get("name", "?"),
                 "; ".join(errors),
             )
-            # Show the appropriate form again with errors
+            # Show the appropriate form again, with the error surfaced to the user
+            form_errors = {"base": "invalid_trigger_config"}
             step_map = {
-                "entity_equals": self.async_step_trigger_entity_equals,
-                "entity_on": self.async_step_trigger_entity_on,
-                "numeric_threshold": self.async_step_trigger_numeric,
-                "template": self.async_step_trigger_template,
+                "entity_equals": ("trigger_entity_equals", self.async_step_trigger_entity_equals),
+                "entity_on": ("trigger_entity_on", self.async_step_trigger_entity_on),
+                "numeric_threshold": ("trigger_numeric", self.async_step_trigger_numeric),
+                "template": ("trigger_template", self.async_step_trigger_template),
             }
-            step_fn = step_map.get(trigger_mode)
-            if step_fn is not None:
-                return await step_fn()
+            step_info = step_map.get(trigger_mode)
+            if step_info is not None:
+                # Re-invoke the step handler to get the base form, then inject errors
+                result = await step_info[1]()
+                # Patch errors into the show_form result
+                if hasattr(result, "description_placeholders") or isinstance(result, dict):
+                    # FlowResultType.FORM — inject errors
+                    if isinstance(result, dict) and result.get("type") == "form":
+                        result["errors"] = form_errors
+                    elif hasattr(result, "__class__") and result.__class__.__name__ == "FlowResult":
+                        result["errors"] = form_errors
+                return result
             # Fallback: abort
             return self.async_abort(reason="invalid_trigger_config")
 

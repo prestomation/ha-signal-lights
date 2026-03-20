@@ -107,10 +107,14 @@
         }
       }
     },
+    "error": {
+      "invalid_trigger_config": "Trigger configuration is invalid. Please check your inputs."
+    },
     "abort": {
       "no_lights": "No lights configured yet. Add a light first.",
       "no_signals": "No signals configured yet. Add a signal first.",
-      "not_enough_signals": "Need at least 2 signals to reorder."
+      "not_enough_signals": "Need at least 2 signals to reorder.",
+      "invalid_trigger_config": "Invalid trigger configuration — could not save signal."
     }
   }
 }

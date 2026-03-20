@@ -49,6 +49,27 @@ class SignalLightsStore:
         self._store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._data: dict[str, Any] = {"lights": [], "signals": []}
 
+    def _normalize_signal(self, sig: dict, index: int) -> None:
+        """Apply all default values and migrations to a signal dict in-place.
+
+        This is the single source of truth for signal defaults/migrations.
+        It is called both during load() and add_signal() to keep stored data
+        consistent.
+        """
+        # Sort order default
+        if "sort_order" not in sig:
+            sig["sort_order"] = index
+        # Trigger mode/config defaults
+        sig.setdefault("trigger_mode", "template")
+        sig.setdefault("trigger_config", {})
+        sig.setdefault("template", "")
+        sig.setdefault("trigger_type", "condition")
+        sig.setdefault("color", [255, 255, 255])
+        sig.setdefault("duration", 0)
+        sig.setdefault("light_filter", [])
+        # Silently drop legacy priority field
+        sig.pop("priority", None)
+
     async def load(self) -> None:
         """Load configuration from disk."""
         raw = await self._store.async_load()
@@ -66,14 +87,10 @@ class SignalLightsStore:
         self._data.setdefault("lights", [])
         self._data.setdefault("signals", [])
         self._data.setdefault("notifications", {"enabled": False, "targets": []})
-        # Migrate: ensure all signals have sort_order, trigger_mode, trigger_config
+
+        # Normalise all signals (sets defaults, drops priority, etc.)
         for i, sig in enumerate(self._data["signals"]):
-            if "sort_order" not in sig:
-                sig["sort_order"] = i
-            if "trigger_mode" not in sig:
-                sig["trigger_mode"] = "template"
-            if "trigger_config" not in sig:
-                sig["trigger_config"] = {}
+            self._normalize_signal(sig, i)
 
         # Validate and attempt to recover signals on load
         for sig in self._data["signals"]:
@@ -136,7 +153,7 @@ class SignalLightsStore:
         """Remove a light by entity_id. Returns True if found."""
         before = len(self._data["lights"])
         self._data["lights"] = [
-            l for l in self._data["lights"] if l["entity_id"] != entity_id
+            light for light in self._data["lights"] if light["entity_id"] != entity_id
         ]
         if len(self._data["lights"]) < before:
             await self.save()
@@ -164,9 +181,8 @@ class SignalLightsStore:
             default=-1,
         )
         signal["sort_order"] = max_order + 1
-        # Ensure trigger_mode and trigger_config defaults
-        signal.setdefault("trigger_mode", "template")
-        signal.setdefault("trigger_config", {})
+        # Apply all defaults/normalisations (also drops legacy priority)
+        self._normalize_signal(signal, signal["sort_order"])
         self._data["signals"].append(signal)
         await self.save()
 

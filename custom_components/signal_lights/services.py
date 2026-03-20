@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import voluptuous as vol
 
@@ -14,6 +15,25 @@ from .coordinator import SignalLightsCoordinator
 from .engine import generate_template_from_trigger, validate_trigger_config
 
 _LOGGER = logging.getLogger(__name__)
+
+# Count limits
+MAX_SIGNALS = 50
+MAX_LIGHTS = 20
+MAX_TARGETS = 10
+
+# Restrict notification targets to the notify.* domain
+_NOTIFY_TARGET_RE = re.compile(r'^notify\.[a-z0-9_]+$')
+
+
+def _validate_notify_target(value: str) -> str:
+    """Voluptuous validator: ensure a notify target matches notify.* domain."""
+    if not _NOTIFY_TARGET_RE.match(value):
+        raise vol.Invalid(
+            f"Notify target '{value}' is invalid — must match notify.<service_name> "
+            "(lowercase alphanumeric/underscore only)"
+        )
+    return value
+
 
 TRIGGER_SIGNAL_SCHEMA = vol.Schema(
     {
@@ -44,10 +64,21 @@ REMOVE_LIGHT_SCHEMA = vol.Schema(
     }
 )
 
+# Structured sub-schema for trigger_config — validates entity_id when present
+_TRIGGER_CONFIG_SCHEMA = vol.Schema(
+    {
+        vol.Optional("entity_id"): cv.entity_id,
+        vol.Optional("state"): cv.string,
+        vol.Optional("threshold"): vol.Coerce(float),
+        vol.Optional("direction"): vol.In(["above", "below"]),
+        vol.Optional("template"): cv.string,
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
 ADD_SIGNAL_SCHEMA = vol.Schema(
     {
         vol.Required("name"): cv.string,
-        vol.Optional("priority", default=0): vol.Coerce(int),
         vol.Required("color"): vol.All(
             [vol.Coerce(int)], vol.Length(min=3, max=3)
         ),
@@ -55,7 +86,7 @@ ADD_SIGNAL_SCHEMA = vol.Schema(
         vol.Optional("trigger_mode", default="template"): vol.In(
             ["entity_equals", "entity_on", "numeric_threshold", "template"]
         ),
-        vol.Optional("trigger_config", default={}): dict,
+        vol.Optional("trigger_config", default={}): _TRIGGER_CONFIG_SCHEMA,
         vol.Optional("template", default=""): cv.string,
         vol.Optional("duration", default=0): vol.Coerce(int),
         vol.Optional("light_filter", default=[]): [cv.entity_id],
@@ -77,7 +108,7 @@ REORDER_SIGNALS_SCHEMA = vol.Schema(
 CONFIGURE_NOTIFICATIONS_SCHEMA = vol.Schema(
     {
         vol.Required("enabled"): cv.boolean,
-        vol.Optional("targets", default=[]): [cv.string],
+        vol.Optional("targets", default=[]): [_validate_notify_target],
     }
 )
 
@@ -139,6 +170,15 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_add_light(call: ServiceCall) -> None:
         """Handle signal_lights.add_light."""
         coord = _get_coordinator(hass)
+
+        # Enforce count limit
+        current_lights = coord.store.get_lights()
+        if len(current_lights) >= MAX_LIGHTS:
+            _LOGGER.error(
+                "Signal Lights: cannot add light — limit of %d lights reached", MAX_LIGHTS
+            )
+            return
+
         entity_id = call.data["entity_id"]
         brightness = call.data.get("brightness", 255)
         await coord.store.add_light(entity_id, brightness)
@@ -172,6 +212,25 @@ async def async_register_services(hass: HomeAssistant) -> None:
         template = call.data.get("template", "")
         name = call.data["name"]
 
+        # Enforce count limit
+        current_signals = coord.store.get_signals()
+        if len(current_signals) >= MAX_SIGNALS:
+            _LOGGER.error(
+                "Signal Lights: cannot add signal '%s' — limit of %d signals reached",
+                name, MAX_SIGNALS,
+            )
+            return
+
+        # Restrict template mode to admin users
+        if trigger_mode == "template":
+            if call.context.user_id:
+                user = await hass.auth.async_get_user(call.context.user_id)
+                if not user or not user.is_admin:
+                    _LOGGER.error(
+                        "Signal Lights: template trigger mode requires admin privileges"
+                    )
+                    return
+
         # Check for duplicate signal names
         if coord.store.get_signal_by_name(name) is not None:
             _LOGGER.error(
@@ -180,8 +239,16 @@ async def async_register_services(hass: HomeAssistant) -> None:
             )
             return
 
-        # Validate trigger config before generating the template
-        if trigger_mode != "template" or not template:
+        # Validate trigger config: for template mode check the template string;
+        # for other modes validate the trigger_config dict.
+        if trigger_mode == "template":
+            if not template:
+                _LOGGER.error(
+                    "Signal Lights: signal '%s' uses template mode but no template was provided",
+                    name,
+                )
+                return
+        else:
             errors = validate_trigger_config(trigger_mode, trigger_config)
             if errors:
                 _LOGGER.error(
@@ -261,6 +328,18 @@ async def async_register_services(hass: HomeAssistant) -> None:
         """Handle signal_lights.reorder_signals."""
         coord = _get_coordinator(hass)
         ordered_names = call.data["order"]
+
+        # Validate that all provided names exist
+        current_signals = coord.store.get_signals()
+        known_names = {s["name"] for s in current_signals}
+        unknown = [n for n in ordered_names if n not in known_names]
+        if unknown:
+            _LOGGER.error(
+                "Signal Lights: reorder_signals — unknown signal name(s): %s",
+                unknown,
+            )
+            return
+
         await coord.store.reorder_signals(ordered_names)
         await coord.async_reload_config()
         _LOGGER.info("Signal Lights: reordered signals: %s", ordered_names)
@@ -274,6 +353,16 @@ async def async_register_services(hass: HomeAssistant) -> None:
         coord = _get_coordinator(hass)
         enabled = call.data["enabled"]
         targets = call.data.get("targets", [])
+
+        # Enforce count limit
+        if len(targets) > MAX_TARGETS:
+            _LOGGER.error(
+                "Signal Lights: cannot configure notifications — limit of %d targets reached "
+                "(%d provided)",
+                MAX_TARGETS, len(targets),
+            )
+            return
+
         await coord.store.set_notification_config(enabled, targets)
         await coord.async_reload_config()
         _LOGGER.info(

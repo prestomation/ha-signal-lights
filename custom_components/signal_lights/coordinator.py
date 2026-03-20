@@ -7,6 +7,7 @@ and persistent notifications.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import timedelta
 from typing import Any
 
@@ -29,6 +30,9 @@ _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=30)
 NOTIFICATION_TAG = "signal_lights_active"
 NOTIFICATION_TITLE = "\U0001f6a8 Signal Lights"
+
+# Restrict notification targets to the notify.* domain only
+_NOTIFY_TARGET_RE = re.compile(r'^notify\.[a-z0-9_]+$')
 
 
 class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -63,17 +67,16 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Load signals and lights from the store into the engine."""
         lights = [
             LightConfig(
-                entity_id=l["entity_id"],
-                brightness=l.get("brightness", 255),
+                entity_id=light["entity_id"],
+                brightness=light.get("brightness", 255),
             )
-            for l in self.store.get_lights()
+            for light in self.store.get_lights()
         ]
         self.engine.set_lights(lights)
 
         signals = [
             Signal(
                 name=s["name"],
-                priority=s.get("priority", 0),
                 color=tuple(s.get("color", [255, 255, 255])),
                 trigger_type=s.get("trigger_type", "condition"),
                 template=s.get("template", ""),
@@ -108,6 +111,10 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._signal_errors[signal.name] = str(err)
                 continue
 
+            # Default args are used here to capture the current loop variables
+            # (signal_name, sig) by value. Without default args, all closures
+            # would reference the same loop variable (the last iteration's value)
+            # due to Python's late-binding closure semantics.
             @callback
             def _template_changed(
                 event, updates, signal_name=signal.name, sig=signal
@@ -134,9 +141,8 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         if is_truthy:
                             self.engine.activate_signal(signal_name)
 
-                self.hass.async_create_task(self._apply_light_states())
-                self.hass.async_create_task(self._apply_notifications())
-                self.async_set_updated_data(self._build_data())
+                # Consolidate into a single task to avoid triple-scheduling
+                self.hass.async_create_task(self._flush())
 
             track_template = TrackTemplate(template, None, None)
 
@@ -146,6 +152,12 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _template_changed,
             )
             self._template_unsubs.append(unsub)
+
+    async def _flush(self) -> None:
+        """Apply light states, notifications, and update coordinator data."""
+        await self._apply_light_states()
+        await self._apply_notifications()
+        self.async_set_updated_data(self._build_data())
 
     async def _apply_light_states(self) -> None:
         """Push the current signal evaluation to physical lights."""
@@ -194,6 +206,23 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         self._last_notified_signal = current_name
 
+    async def _call_notify_target(self, target: str, data: dict) -> None:
+        """Call a notify service target with the given data.
+
+        target must be in 'domain.service' format (e.g. notify.mobile_app_fold7).
+        """
+        parts = target.split(".", 1)
+        if len(parts) == 2:
+            try:
+                await self.hass.services.async_call(
+                    parts[0],
+                    parts[1],
+                    data,
+                    blocking=False,
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("Failed to call notify target %s", target)
+
     async def _send_notifications(self, signal_name: str, targets: list[str]) -> None:
         """Send or update persistent notification and mobile targets."""
         # HA sidebar persistent notification
@@ -211,24 +240,23 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except Exception:  # noqa: BLE001
             _LOGGER.debug("Failed to create persistent notification")
 
-        # Mobile app targets
+        # Mobile app targets — validate domain before calling
         for target in targets:
-            try:
-                # target is like "notify.mobile_app_fold7" — split domain/service
-                parts = target.split(".", 1)
-                if len(parts) == 2:
-                    await self.hass.services.async_call(
-                        parts[0],
-                        parts[1],
-                        {
-                            "title": NOTIFICATION_TITLE,
-                            "message": signal_name,
-                            "data": {"tag": NOTIFICATION_TAG},
-                        },
-                        blocking=False,
-                    )
-            except Exception:  # noqa: BLE001
-                _LOGGER.debug("Failed to send notification to %s", target)
+            if not _NOTIFY_TARGET_RE.match(target):
+                _LOGGER.warning(
+                    "Signal Lights: skipping invalid notification target '%s' "
+                    "(must match notify.<service_name>)",
+                    target,
+                )
+                continue
+            await self._call_notify_target(
+                target,
+                {
+                    "title": NOTIFICATION_TITLE,
+                    "message": signal_name,
+                    "data": {"tag": NOTIFICATION_TAG},
+                },
+            )
 
     async def _dismiss_notifications(self, targets: list[str]) -> None:
         """Dismiss persistent notification and clear mobile notifications."""
@@ -243,38 +271,43 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Failed to dismiss persistent notification")
 
         for target in targets:
-            try:
-                parts = target.split(".", 1)
-                if len(parts) == 2:
-                    await self.hass.services.async_call(
-                        parts[0],
-                        parts[1],
-                        {
-                            "message": "clear_notification",
-                            "data": {"tag": NOTIFICATION_TAG},
-                        },
-                        blocking=False,
-                    )
-            except Exception:  # noqa: BLE001
-                _LOGGER.debug("Failed to clear notification on %s", target)
+            if not _NOTIFY_TARGET_RE.match(target):
+                _LOGGER.warning(
+                    "Signal Lights: skipping invalid notification target '%s' "
+                    "(must match notify.<service_name>)",
+                    target,
+                )
+                continue
+            await self._call_notify_target(
+                target,
+                {
+                    "message": "clear_notification",
+                    "data": {"tag": NOTIFICATION_TAG},
+                },
+            )
 
     def _build_data(self) -> dict[str, Any]:
-        """Build the coordinator data dict consumed by sensors."""
+        """Build the coordinator data dict consumed by sensors.
+
+        Uses engine.signals instead of re-reading the store to avoid redundant
+        disk reads and re-sorting.
+        """
         winner = self.engine.get_global_winner()
         active_signals = self.engine.get_active_signals()
-        signals_info = []
-        for s in self.store.get_signals():
-            signals_info.append({
-                "name": s["name"],
-                "sort_order": s.get("sort_order", 0),
-                "color": s.get("color", [255, 255, 255]),
-                "trigger_type": s.get("trigger_type", "condition"),
-                "trigger_mode": s.get("trigger_mode", "template"),
-                "trigger_config": s.get("trigger_config", {}),
-                "template": s.get("template", ""),
-                "duration": s.get("duration", 0),
-                "light_filter": s.get("light_filter", []),
-            })
+        signals_info = [
+            {
+                "name": s.name,
+                "sort_order": s.sort_order,
+                "color": list(s.color),
+                "trigger_type": s.trigger_type,
+                "trigger_mode": s.trigger_mode,
+                "trigger_config": s.trigger_config,
+                "template": s.template,
+                "duration": s.duration,
+                "light_filter": s.light_filter,
+            }
+            for s in self.engine.signals
+        ]
         return {
             "active_signal": winner.name if winner else "none",
             "active_color": _rgb_to_hex(winner.color) if winner else "#000000",
@@ -300,34 +333,26 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Reload configuration from store and re-setup template listeners."""
         self._load_engine_config()
         self._setup_template_listeners()
-        await self._apply_light_states()
-        await self._apply_notifications()
-        self.async_set_updated_data(self._build_data())
+        await self._flush()
 
     async def async_trigger_signal(self, name: str) -> bool:
         """Manually trigger an event signal."""
         result = self.engine.activate_signal(name)
         if result:
-            await self._apply_light_states()
-            await self._apply_notifications()
-            self.async_set_updated_data(self._build_data())
+            await self._flush()
         return result
 
     async def async_dismiss_signal(self, name: str) -> bool:
         """Manually dismiss a signal."""
         result = self.engine.dismiss_signal(name)
         if result:
-            await self._apply_light_states()
-            await self._apply_notifications()
-            self.async_set_updated_data(self._build_data())
+            await self._flush()
         return result
 
     async def async_refresh_signals(self) -> None:
         """Force re-evaluate all signals."""
         self.engine.cleanup_expired()
-        await self._apply_light_states()
-        await self._apply_notifications()
-        self.async_set_updated_data(self._build_data())
+        await self._flush()
 
     def get_device_info(self) -> DeviceInfo:
         """Return DeviceInfo for the Signal Lights instance."""

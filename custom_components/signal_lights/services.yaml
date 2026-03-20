@@ -67,7 +67,7 @@ add_signal:
   name: Add Signal
   description: >
     Add a new signal definition. Signals are ordered by position (first = highest priority).
-    New signals are added to the end of the list.
+    New signals are added to the end of the list. Use reorder_signals to change priority.
   fields:
     name:
       name: Signal Name
