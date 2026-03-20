@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from datetime import timedelta
 from typing import Any
 
@@ -22,7 +21,7 @@ except ImportError:
     from homeassistant.helpers.entity import DeviceInfo  # type: ignore[no-redef]
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import DOMAIN
+from .const import DOMAIN, NOTIFY_TARGET_RE
 from .engine import Signal, LightConfig, SignalEngine
 from .store import SignalLightsStore
 
@@ -31,9 +30,6 @@ _LOGGER = logging.getLogger(__name__)
 SCAN_INTERVAL = timedelta(seconds=30)
 NOTIFICATION_TAG = "signal_lights_active"
 NOTIFICATION_TITLE = "\U0001f6a8 Signal Lights"
-
-# Restrict notification targets to the notify.* domain only
-_NOTIFY_TARGET_RE = re.compile(r'^notify\.[a-z0-9_]+$')
 
 
 class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -254,7 +250,7 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # Mobile app targets — validate domain before calling
         for target in targets:
-            if not _NOTIFY_TARGET_RE.match(target):
+            if not NOTIFY_TARGET_RE.match(target):
                 _LOGGER.warning(
                     "Signal Lights: skipping invalid notification target '%s' "
                     "(must match notify.<service_name>)",
@@ -283,7 +279,7 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("Failed to dismiss persistent notification")
 
         for target in targets:
-            if not _NOTIFY_TARGET_RE.match(target):
+            if not NOTIFY_TARGET_RE.match(target):
                 _LOGGER.warning(
                     "Signal Lights: skipping invalid notification target '%s' "
                     "(must match notify.<service_name>)",
@@ -365,6 +361,11 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Force re-evaluate all signals."""
         self.engine.cleanup_expired()
         await self._flush()
+
+    @property
+    def entry_title(self) -> str:
+        """Human-readable name for this config entry."""
+        return self._entry.title
 
     def get_device_info(self) -> DeviceInfo:
         """Return DeviceInfo for the Signal Lights instance."""

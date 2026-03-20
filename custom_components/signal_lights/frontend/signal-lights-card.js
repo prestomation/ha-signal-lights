@@ -66,27 +66,33 @@ class SignalLightsCardEditor extends HTMLElement {
   }
 
   set hass(h) {
+    const prev = this.__hass;
     this.__hass = h;
-    this._render();
+    if (!prev || !this._config || Object.keys(this._config).length === 0) return;
+    // Only re-render if the set of _active_signal entities changed
+    const prevKeys = Object.keys(prev.states).filter(k => k.endsWith('_active_signal')).sort().join(',');
+    const newKeys = Object.keys(h.states).filter(k => k.endsWith('_active_signal')).sort().join(',');
+    if (prevKeys !== newKeys) {
+      this._render();
+    }
   }
 
-  /** Detect Signal Lights config entry IDs by scanning known sensor entities. */
+  /** Detect Signal Lights config entries by scanning _active_signal sensor entities. */
   _detectEntries() {
     if (!this.__hass) return [];
     const states = this.__hass.states;
-    const seen = new Map(); // entry_id -> label
+    const seen = new Map(); // config entry UUID -> label
     for (const eid of Object.keys(states)) {
-      // Sensors are named sensor.<entry_title_slug>_active_signal
       if (eid.endsWith('_active_signal')) {
-        const attrs = states[eid].attributes;
-        // entry_id is stored in the device identifiers — not directly visible here.
-        // Use a heuristic: collect entity IDs that match _active_signal and try to
-        // derive a display label from the entity name.
+        const attrs = states[eid].attributes || {};
+        // Use the real config entry UUID from the sensor's entry_id attribute
+        const entryId = attrs.entry_id;
+        if (!entryId) continue;
         const label = attrs.friendly_name || eid;
-        seen.set(eid, label);
+        seen.set(entryId, label);
       }
     }
-    return Array.from(seen.entries()).map(([eid, label]) => ({ eid, label }));
+    return Array.from(seen.entries()).map(([entryId, label]) => ({ eid: entryId, label }));
   }
 
   _render() {
@@ -237,10 +243,10 @@ class SignalLightsCard extends HTMLElement {
     let activeEntity = null;
     for (const eid of Object.keys(states)) {
       if (eid.endsWith('_active_signal')) {
-        // If we have a config_entry_id, match it via entry_id attribute (if present)
         const attrs = states[eid].attributes || {};
         if (configEntryId) {
-          if (attrs.entry_id === configEntryId || eid === configEntryId) {
+          // Match against the real config entry UUID stored in attrs.entry_id
+          if (attrs.entry_id === configEntryId) {
             activeEntity = states[eid];
             break;
           }
@@ -253,10 +259,15 @@ class SignalLightsCard extends HTMLElement {
     return activeEntity;
   }
 
-  /** Return the config_entry_id to include in service calls (or empty object). */
+  /** Return the config_entry_id to include in service calls (or empty object).
+   *  Only includes it when the value looks like a real HA config entry ULID. */
   _entryIdData() {
     const id = this._config.config_entry_id;
-    return id ? { config_entry_id: id } : {};
+    // HA entry IDs are 26-char uppercase alphanumeric ULIDs
+    if (id && /^[0-9A-Z]{26}$/.test(id)) {
+      return { config_entry_id: id };
+    }
+    return {};
   }
 
   async _callService(domain, service, data) {

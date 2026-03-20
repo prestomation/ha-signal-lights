@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -10,7 +11,7 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
-from .const import DOMAIN
+from .const import DOMAIN, NOTIFY_TARGET_RE
 from .coordinator import SignalLightsCoordinator
 from .engine import generate_template_from_trigger, validate_trigger_config
 
@@ -21,13 +22,20 @@ MAX_SIGNALS = 50
 MAX_LIGHTS = 20
 MAX_TARGETS = 10
 
-# Restrict notification targets to the notify.* domain
-_NOTIFY_TARGET_RE = re.compile(r'^notify\.[a-z0-9_]+$')
+# Validate config_entry_id format (HA uses ULID: 26 uppercase alphanumeric chars)
+_ENTRY_ID_RE = re.compile(r'^[0-9A-Z]{26}$')
+
+
+def _validate_entry_id(value: str) -> str:
+    """Voluptuous validator: ensure config_entry_id is a valid HA ULID."""
+    if not _ENTRY_ID_RE.match(value):
+        raise vol.Invalid("config_entry_id must be a valid HA config entry ID (26-char ULID)")
+    return value
 
 
 def _validate_notify_target(value: str) -> str:
     """Voluptuous validator: ensure a notify target matches notify.* domain."""
-    if not _NOTIFY_TARGET_RE.match(value):
+    if not NOTIFY_TARGET_RE.match(value):
         raise vol.Invalid(
             f"Notify target '{value}' is invalid — must match notify.<service_name> "
             "(lowercase alphanumeric/underscore only)"
@@ -35,23 +43,26 @@ def _validate_notify_target(value: str) -> str:
     return value
 
 
+# Shared optional config_entry_id field used in all service schemas
+_ENTRY_ID_FIELD = {vol.Optional("config_entry_id"): _validate_entry_id}
+
 TRIGGER_SIGNAL_SCHEMA = vol.Schema(
     {
         vol.Required("name"): cv.string,
-        vol.Optional("config_entry_id"): cv.string,
+        **_ENTRY_ID_FIELD,
     }
 )
 
 DISMISS_SIGNAL_SCHEMA = vol.Schema(
     {
         vol.Required("name"): cv.string,
-        vol.Optional("config_entry_id"): cv.string,
+        **_ENTRY_ID_FIELD,
     }
 )
 
 REFRESH_SCHEMA = vol.Schema(
     {
-        vol.Optional("config_entry_id"): cv.string,
+        **_ENTRY_ID_FIELD,
     }
 )
 
@@ -61,14 +72,14 @@ ADD_LIGHT_SCHEMA = vol.Schema(
         vol.Optional("brightness", default=255): vol.All(
             vol.Coerce(int), vol.Range(min=1, max=255)
         ),
-        vol.Optional("config_entry_id"): cv.string,
+        **_ENTRY_ID_FIELD,
     }
 )
 
 REMOVE_LIGHT_SCHEMA = vol.Schema(
     {
         vol.Required("entity_id"): cv.entity_id,
-        vol.Optional("config_entry_id"): cv.string,
+        **_ENTRY_ID_FIELD,
     }
 )
 
@@ -98,21 +109,21 @@ ADD_SIGNAL_SCHEMA = vol.Schema(
         vol.Optional("template", default=""): cv.string,
         vol.Optional("duration", default=0): vol.Coerce(int),
         vol.Optional("light_filter", default=[]): [cv.entity_id],
-        vol.Optional("config_entry_id"): cv.string,
+        **_ENTRY_ID_FIELD,
     }
 )
 
 REMOVE_SIGNAL_SCHEMA = vol.Schema(
     {
         vol.Required("name"): cv.string,
-        vol.Optional("config_entry_id"): cv.string,
+        **_ENTRY_ID_FIELD,
     }
 )
 
 REORDER_SIGNALS_SCHEMA = vol.Schema(
     {
         vol.Required("order"): [cv.string],
-        vol.Optional("config_entry_id"): cv.string,
+        **_ENTRY_ID_FIELD,
     }
 )
 
@@ -120,7 +131,7 @@ CONFIGURE_NOTIFICATIONS_SCHEMA = vol.Schema(
     {
         vol.Required("enabled"): cv.boolean,
         vol.Optional("targets", default=[]): [_validate_notify_target],
-        vol.Optional("config_entry_id"): cv.string,
+        **_ENTRY_ID_FIELD,
     }
 )
 
@@ -146,9 +157,9 @@ def _get_coordinator(
         for eid, _title, coord in coords:
             if eid == entry_id:
                 return coord
-        _LOGGER.error(
-            "Signal Lights: config_entry_id '%s' not found. Available: %s",
-            entry_id,
+        _LOGGER.warning("Signal Lights: config_entry_id '%s' not found", entry_id)
+        _LOGGER.debug(
+            "Signal Lights: available entries: %s",
             [f"{eid} ({title})" for eid, title, _ in coords],
         )
         return None
@@ -160,22 +171,50 @@ def _get_coordinator(
         return None
 
     # Multiple entries and no entry_id specified
-    _LOGGER.error(
-        "Signal Lights: multiple setups exist — specify config_entry_id. Available: %s",
+    _LOGGER.warning("Signal Lights: multiple setups exist — specify config_entry_id")
+    _LOGGER.debug(
+        "Signal Lights: available entries: %s",
         [f"{eid} ({title})" for eid, title, _ in coords],
     )
     return None
 
 
+def _resolve_coordinator(
+    hass: HomeAssistant, call: ServiceCall
+) -> SignalLightsCoordinator | None:
+    """Return coordinator for the call, logging a warning when none is found."""
+    entry_id = call.data.get("config_entry_id")
+    coord = _get_coordinator(hass, entry_id)
+    if coord is None:
+        _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
+    return coord
+
+
+def _find_light_conflict(
+    hass: HomeAssistant, entity_id: str, skip_coord: SignalLightsCoordinator
+) -> tuple[str, str] | None:
+    """Return (entry_id, title) of another setup that already owns entity_id, or None."""
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        other = getattr(entry, "runtime_data", None)
+        if isinstance(other, SignalLightsCoordinator) and other is not skip_coord:
+            if any(light["entity_id"] == entity_id for light in other.store.get_lights()):
+                return entry.entry_id, other.entry_title
+    return None
+
+
 async def async_register_services(hass: HomeAssistant) -> None:
     """Register all Signal Lights services."""
+    if hass.services.has_service(DOMAIN, "trigger_signal"):
+        return  # already registered
+
+    # Domain-level lock for add_light to prevent cross-entry race conditions
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN].setdefault("add_light_lock", asyncio.Lock())
 
     async def handle_trigger_signal(call: ServiceCall) -> None:
         """Handle signal_lights.trigger_signal."""
-        entry_id = call.data.get("config_entry_id")
-        coord = _get_coordinator(hass, entry_id)
+        coord = _resolve_coordinator(hass, call)
         if coord is None:
-            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
             return
         name = call.data["name"]
         result = await coord.async_trigger_signal(name)
@@ -190,10 +229,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_dismiss_signal(call: ServiceCall) -> None:
         """Handle signal_lights.dismiss_signal."""
-        entry_id = call.data.get("config_entry_id")
-        coord = _get_coordinator(hass, entry_id)
+        coord = _resolve_coordinator(hass, call)
         if coord is None:
-            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
             return
         name = call.data["name"]
         result = await coord.async_dismiss_signal(name)
@@ -209,10 +246,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_refresh(call: ServiceCall) -> None:
         """Handle signal_lights.refresh."""
-        entry_id = call.data.get("config_entry_id")
-        coord = _get_coordinator(hass, entry_id)
+        coord = _resolve_coordinator(hass, call)
         if coord is None:
-            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
             return
         await coord.async_refresh_signals()
 
@@ -226,46 +261,39 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_add_light(call: ServiceCall) -> None:
         """Handle signal_lights.add_light."""
-        entry_id = call.data.get("config_entry_id")
-        coord = _get_coordinator(hass, entry_id)
+        coord = _resolve_coordinator(hass, call)
         if coord is None:
-            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
             return
 
-        # Enforce count limit
-        current_lights = coord.store.get_lights()
-        if len(current_lights) >= MAX_LIGHTS:
-            _LOGGER.error(
-                "Signal Lights: cannot add light — limit of %d lights reached", MAX_LIGHTS
-            )
-            return
+        async with hass.data[DOMAIN]["add_light_lock"]:
+            # Enforce count limit
+            current_lights = coord.store.get_lights()
+            if len(current_lights) >= MAX_LIGHTS:
+                _LOGGER.error(
+                    "Signal Lights: cannot add light — limit of %d lights reached", MAX_LIGHTS
+                )
+                return
 
-        entity_id = call.data["entity_id"]
-        brightness = call.data.get("brightness", 255)
+            entity_id = call.data["entity_id"]
+            brightness = call.data.get("brightness", 255)
 
-        # Check uniqueness across ALL entries — a light can only belong to one setup
-        all_entries = hass.config_entries.async_entries(DOMAIN)
-        for other_entry in all_entries:
-            other_coord = getattr(other_entry, "runtime_data", None)
-            if not isinstance(other_coord, SignalLightsCoordinator):
-                continue
-            if other_coord is coord:
-                continue
-            for registered_light in other_coord.store.get_lights():
-                if registered_light["entity_id"] == entity_id:
-                    _LOGGER.error(
-                        "Signal Lights: light '%s' is already registered in setup '%s' (%s) — "
-                        "remove it there first before adding to '%s'",
-                        entity_id,
-                        other_entry.title,
-                        other_entry.entry_id,
-                        coord._entry.title,
-                    )
-                    return
+            # Check uniqueness across ALL entries — a light can only belong to one setup
+            conflict = _find_light_conflict(hass, entity_id, coord)
+            if conflict is not None:
+                conflict_entry_id, conflict_title = conflict
+                _LOGGER.error(
+                    "Signal Lights: light '%s' is already registered in setup '%s' (%s) — "
+                    "remove it there first before adding to '%s'",
+                    entity_id,
+                    conflict_title,
+                    conflict_entry_id,
+                    coord.entry_title,
+                )
+                return
 
-        await coord.store.add_light(entity_id, brightness)
-        await coord.async_reload_config()
-        _LOGGER.info("Signal Lights: added light %s (brightness %d)", entity_id, brightness)
+            await coord.store.add_light(entity_id, brightness)
+            await coord.async_reload_config()
+            _LOGGER.info("Signal Lights: added light %s (brightness %d)", entity_id, brightness)
 
     hass.services.async_register(
         DOMAIN, "add_light", handle_add_light, schema=ADD_LIGHT_SCHEMA
@@ -273,10 +301,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_remove_light(call: ServiceCall) -> None:
         """Handle signal_lights.remove_light."""
-        entry_id = call.data.get("config_entry_id")
-        coord = _get_coordinator(hass, entry_id)
+        coord = _resolve_coordinator(hass, call)
         if coord is None:
-            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
             return
         entity_id = call.data["entity_id"]
         removed = await coord.store.remove_light(entity_id)
@@ -292,10 +318,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_add_signal(call: ServiceCall) -> None:
         """Handle signal_lights.add_signal."""
-        entry_id = call.data.get("config_entry_id")
-        coord = _get_coordinator(hass, entry_id)
+        coord = _resolve_coordinator(hass, call)
         if coord is None:
-            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
             return
         trigger_mode = call.data.get("trigger_mode", "template")
         trigger_config = call.data.get("trigger_config", {})
@@ -403,10 +427,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_remove_signal(call: ServiceCall) -> None:
         """Handle signal_lights.remove_signal."""
-        entry_id = call.data.get("config_entry_id")
-        coord = _get_coordinator(hass, entry_id)
+        coord = _resolve_coordinator(hass, call)
         if coord is None:
-            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
             return
         name = call.data["name"]
         removed = await coord.store.remove_signal(name)
@@ -422,10 +444,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_reorder_signals(call: ServiceCall) -> None:
         """Handle signal_lights.reorder_signals."""
-        entry_id = call.data.get("config_entry_id")
-        coord = _get_coordinator(hass, entry_id)
+        coord = _resolve_coordinator(hass, call)
         if coord is None:
-            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
             return
         ordered_names = call.data["order"]
 
@@ -450,10 +470,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
     async def handle_configure_notifications(call: ServiceCall) -> None:
         """Handle signal_lights.configure_notifications."""
-        entry_id = call.data.get("config_entry_id")
-        coord = _get_coordinator(hass, entry_id)
+        coord = _resolve_coordinator(hass, call)
         if coord is None:
-            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
             return
         enabled = call.data["enabled"]
         targets = call.data.get("targets", [])
