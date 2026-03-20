@@ -136,12 +136,8 @@ class SignalLightsCardEditor extends HTMLElement {
           <label>Title (optional)</label>
           <input name="title" value="${_esc(this._config.title || '')}" placeholder="Signal Lights" />
         </div>
-        <div>
-          <label>Entity (optional — auto-detected if blank)</label>
-          <input name="entity" value="${_esc(this._config.entity || '')}" placeholder="sensor.signal_lights_active_signal" />
-        </div>
         ${selectorHtml}
-        <div class="hint">${showSelector ? 'Multiple Signal Lights setups detected. Select which one to display, or set entity directly.' : 'Leave entity blank for auto-detection, or set a specific active_signal sensor.'}</div>
+        <div class="hint">${showSelector ? 'Multiple Signal Lights setups detected. Select which one to display.' : ''}</div>
       </div>
     `;
     this.shadowRoot.querySelectorAll('input, select').forEach(el => {
@@ -156,12 +152,6 @@ class SignalLightsCardEditor extends HTMLElement {
       newConfig.title = titleEl.value.trim();
     } else {
       delete newConfig.title;
-    }
-    const entityEl = this.shadowRoot.querySelector('input[name="entity"]');
-    if (entityEl && entityEl.value.trim()) {
-      newConfig.entity = entityEl.value.trim();
-    } else {
-      delete newConfig.entity;
     }
     const entryEl = this.shadowRoot.querySelector('select[name="config_entry_id"]');
     if (entryEl) {
@@ -490,7 +480,7 @@ class SignalLightsCard extends HTMLElement {
             <span class="item-detail">${typeBadge} ${_esc(s.trigger_type)} · ${triggerDesc}</span>
           </div>
           <div class="signal-actions">
-            ${s.trigger_type === 'event' ? `<button class="btn-small btn-trigger" data-name="${_esc(s.name)}" title="Trigger">▶</button>` : ''}
+            ${s.trigger_type === 'event' && !isActive ? `<button class="btn-small btn-trigger" data-name="${_esc(s.name)}" title="Trigger">▶</button>` : ''}
             ${isActive ? `<button class="btn-small btn-dismiss" data-name="${_esc(s.name)}" title="Dismiss">⏹</button>` : ''}
             <button class="btn-small btn-edit" data-name="${_esc(s.name)}" title="Edit signal">✏️</button>
             <button class="btn-remove" data-name="${_esc(s.name)}" title="Remove signal">✕</button>
@@ -840,7 +830,24 @@ class SignalLightsCard extends HTMLElement {
     if (!container) return;
 
     const notif = this._notificationsCache || { enabled: false, targets: [] };
-    const targets = (notif.targets || []).join(', ');
+    const currentTargets = new Set(notif.targets || []);
+
+    // Discover available notify.* services from hass
+    const notifyServices = [];
+    if (this._hass && this._hass.services && this._hass.services.notify) {
+      for (const svc of Object.keys(this._hass.services.notify).sort()) {
+        const target = `notify.${svc}`;
+        notifyServices.push(target);
+      }
+    }
+
+    const optionsHtml = notifyServices.map(t =>
+      `<label class="target-option"><input type="checkbox" value="${_esc(t)}" ${currentTargets.has(t) ? 'checked' : ''} /> <span>${_esc(t)}</span></label>`
+    ).join('');
+
+    const fallbackHtml = notifyServices.length === 0
+      ? `<input type="text" id="sl-notif-targets-text" value="${_esc([...currentTargets].join(', '))}" placeholder="notify.mobile_app_phone" /><div class="hint">No notify services detected — enter manually (comma-separated)</div>`
+      : '';
 
     container.innerHTML = `
       <div class="notif-form">
@@ -849,10 +856,8 @@ class SignalLightsCard extends HTMLElement {
           <input type="checkbox" id="sl-notif-enabled" ${notif.enabled ? 'checked' : ''} />
         </label>
         <div class="notif-targets" style="${notif.enabled ? '' : 'opacity: 0.5; pointer-events: none;'}">
-          <label>Notify targets (comma-separated)</label>
-          <input type="text" id="sl-notif-targets" value="${_esc(targets)}"
-                 placeholder="notify.mobile_app_phone" />
-          <div class="hint">e.g., notify.mobile_app_phone, notify.mobile_app_tablet</div>
+          <label>Notify targets</label>
+          ${notifyServices.length > 0 ? `<div class="target-list" id="sl-notif-targets">${optionsHtml}</div>` : fallbackHtml}
         </div>
         <button class="btn-save" id="sl-notif-save">Save</button>
       </div>
@@ -872,8 +877,16 @@ class SignalLightsCard extends HTMLElement {
 
     container.querySelector('#sl-notif-save').addEventListener('click', () => {
       const enabled = enabledCheckbox.checked;
-      const targetsRaw = container.querySelector('#sl-notif-targets').value;
-      const targetsList = targetsRaw.split(',').map(t => t.trim()).filter(Boolean);
+      let targetsList;
+      const checkboxContainer = container.querySelector('#sl-notif-targets');
+      const textFallback = container.querySelector('#sl-notif-targets-text');
+      if (checkboxContainer) {
+        targetsList = [...checkboxContainer.querySelectorAll('input[type="checkbox"]:checked')].map(cb => cb.value);
+      } else if (textFallback) {
+        targetsList = textFallback.value.split(',').map(t => t.trim()).filter(Boolean);
+      } else {
+        targetsList = [];
+      }
       this._callService('signal_lights', 'configure_notifications', {
         enabled,
         targets: targetsList,
@@ -1583,13 +1596,34 @@ class SignalLightsCard extends HTMLElement {
         width: 18px; height: 18px;
         cursor: pointer;
       }
-      .notif-targets label {
+      .notif-targets > label {
         display: block;
         font-size: 12px;
         color: var(--secondary-text-color);
         margin-bottom: 4px;
       }
-      .notif-targets input {
+      .target-list {
+        max-height: 200px;
+        overflow-y: auto;
+        border: 1px solid var(--divider-color, #e0e0e0);
+        border-radius: 6px;
+        padding: 6px 8px;
+        background: var(--card-background-color);
+      }
+      .target-option {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+        font-size: 13px;
+        color: var(--primary-text-color);
+        cursor: pointer;
+      }
+      .target-option input[type="checkbox"] {
+        width: auto;
+        margin: 0;
+      }
+      .notif-targets input[type="text"] {
         width: 100%;
         box-sizing: border-box;
         padding: 8px 10px;
