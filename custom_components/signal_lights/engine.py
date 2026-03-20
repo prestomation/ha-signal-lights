@@ -234,8 +234,10 @@ class SignalEngine:
         self._sorted_cache = None
 
     def _get_sorted_active(self) -> list[ActiveSignal]:
-        """Return sorted active signals, rebuilding cache if dirty."""
+        """Return sorted non-expired active signals, rebuilding cache if dirty."""
         if self._sorted_cache is None:
+            # Filter expired and sort in one pass
+            self._active = [a for a in self._active if not a.is_expired]
             self._sorted_cache = sorted(
                 self._active, key=lambda a: a.signal.sort_order
             )

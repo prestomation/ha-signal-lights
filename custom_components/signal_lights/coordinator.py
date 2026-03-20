@@ -6,6 +6,7 @@ and persistent notifications.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import timedelta
@@ -57,6 +58,7 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._template_unsubs: list[Any] = []
         self._last_notified_signal: str | None = None
         self._signal_errors: dict[str, str] = {}
+        self._flush_lock = asyncio.Lock()
 
     async def async_setup(self) -> None:
         """Set up the engine from stored configuration and start template tracking."""
@@ -154,10 +156,15 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._template_unsubs.append(unsub)
 
     async def _flush(self) -> None:
-        """Apply light states, notifications, and update coordinator data."""
-        await self._apply_light_states()
-        await self._apply_notifications()
-        self.async_set_updated_data(self._build_data())
+        """Apply light states, notifications, and update coordinator data.
+
+        Uses a lock to prevent concurrent flushes from interleaving
+        (e.g., rapid template state changes firing multiple callbacks).
+        """
+        async with self._flush_lock:
+            await self._apply_light_states()
+            await self._apply_notifications()
+            self.async_set_updated_data(self._build_data())
 
     async def _apply_light_states(self) -> None:
         """Push the current signal evaluation to physical lights."""
