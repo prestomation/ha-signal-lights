@@ -33,6 +33,16 @@ def _validate_entry_id(value: str) -> str:
     return value
 
 
+def _validate_signal_name(value: str) -> str:
+    """Voluptuous validator: ensure signal name is non-empty and at most 100 chars."""
+    value = cv.string(value).strip()
+    if not value:
+        raise vol.Invalid("Signal name cannot be empty")
+    if len(value) > 100:
+        raise vol.Invalid("Signal name must be 100 characters or fewer")
+    return value
+
+
 def _validate_notify_target(value: str) -> str:
     """Voluptuous validator: ensure a notify target matches notify.* domain."""
     if not NOTIFY_TARGET_RE.match(value):
@@ -48,14 +58,14 @@ _ENTRY_ID_FIELD = {vol.Optional("config_entry_id"): _validate_entry_id}
 
 TRIGGER_SIGNAL_SCHEMA = vol.Schema(
     {
-        vol.Required("name"): cv.string,
+        vol.Required("name"): _validate_signal_name,
         **_ENTRY_ID_FIELD,
     }
 )
 
 DISMISS_SIGNAL_SCHEMA = vol.Schema(
     {
-        vol.Required("name"): cv.string,
+        vol.Required("name"): _validate_signal_name,
         **_ENTRY_ID_FIELD,
     }
 )
@@ -97,7 +107,7 @@ _TRIGGER_CONFIG_SCHEMA = vol.Schema(
 
 ADD_SIGNAL_SCHEMA = vol.Schema(
     {
-        vol.Required("name"): cv.string,
+        vol.Required("name"): _validate_signal_name,
         vol.Required("color"): vol.All(
             [vol.Coerce(int)], vol.Length(min=3, max=3)
         ),
@@ -115,15 +125,15 @@ ADD_SIGNAL_SCHEMA = vol.Schema(
 
 REMOVE_SIGNAL_SCHEMA = vol.Schema(
     {
-        vol.Required("name"): cv.string,
+        vol.Required("name"): _validate_signal_name,
         **_ENTRY_ID_FIELD,
     }
 )
 
 UPDATE_SIGNAL_SCHEMA = vol.Schema(
     {
-        vol.Required("name"): cv.string,
-        vol.Optional("new_name"): cv.string,
+        vol.Required("name"): _validate_signal_name,
+        vol.Optional("new_name"): _validate_signal_name,
         vol.Optional("color"): vol.All(
             [vol.Coerce(int)], vol.Length(min=3, max=3)
         ),

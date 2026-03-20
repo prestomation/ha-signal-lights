@@ -220,10 +220,17 @@ class SignalLightsCardEditor extends HTMLElement {
 
   async _render() {
     // Guard against concurrent renders (e.g. hass set + setConfig racing).
-    if (this._rendering) return;
+    // Use a pending-render pattern so no render is silently dropped.
+    if (this._rendering) {
+      this._pendingRender = true;
+      return;
+    }
     this._rendering = true;
     try {
-      await this._renderInner();
+      do {
+        this._pendingRender = false;
+        await this._renderInner();
+      } while (this._pendingRender);
     } finally {
       this._rendering = false;
     }
@@ -339,7 +346,14 @@ class SignalLightsCard extends HTMLElement {
   }
 
   setConfig(config) {
+    const prevEntryId = this._config ? this._config.config_entry_id : undefined;
     this._config = { ...config };
+    if (prevEntryId !== config.config_entry_id && this._wsUnsub) {
+      this._wsUnsub();
+      this._wsUnsub = null;
+      this._wsData = null;
+      if (this._hass) this._subscribeToUpdates();
+    }
   }
 
   set hass(hass) {
@@ -387,13 +401,18 @@ class SignalLightsCard extends HTMLElement {
     if (entryId) msg.entry_id = entryId;
 
     try {
-      this._wsUnsub = await this._hass.connection.subscribeMessage(
+      const unsub = await this._hass.connection.subscribeMessage(
         (event) => {
           this._wsData = event;
           this._updateFromWsData();
         },
         msg
       );
+      if (!this.isConnected) {
+        unsub();
+        return;
+      }
+      this._wsUnsub = unsub;
     } catch (err) {
       console.error('Signal Lights: WS subscribe failed:', err);
     } finally {
@@ -404,7 +423,16 @@ class SignalLightsCard extends HTMLElement {
   _updateFromWsData() {
     if (!this._wsData || this._wsData.length === 0) return;
     const entry = this._getActiveEntry();
-    if (!entry) return;
+    if (!entry) {
+      // config_entry_id is set but the entry was not found — show empty state
+      this.shadowRoot.innerHTML = `
+        <style>:host { display: block; } ha-card { padding: 16px; }</style>
+        <ha-card><div style="padding:16px;color:var(--secondary-text-color);font-size:13px;">
+          Signal Lights entry not found. Check your card configuration.
+        </div></ha-card>
+      `;
+      return;
+    }
 
     // Detect structural changes that require a full DOM rebuild.
     const signalsChanged = JSON.stringify(entry.signals) !== JSON.stringify(this._signalsCache);
@@ -424,23 +452,30 @@ class SignalLightsCard extends HTMLElement {
     // Don't disrupt active editing forms.
     if (this._editingSignal || this._showAddSignal || this._showAddLight) return;
 
+    const prevActiveNames = this._prevActiveNames || [];
+    const activeChanged = JSON.stringify(this._activeSignalNames) !== JSON.stringify(prevActiveNames);
+    this._prevActiveNames = [...(this._activeSignalNames || [])];
+
     if (signalsChanged || lightsChanged || notifChanged) {
       // Structural change — full rebuild needed.
       this._render();
+    } else if (activeChanged) {
+      // Active signals changed (trigger/dismiss) — update status + signal list for button swap (▶/⏹)
+      this._renderStatusBar();
+      this._renderSignals();
     } else {
-      // Status-only change (active_signal, active_color, queue_depth) —
-      // update the status bar in-place without destroying the DOM.
+      // Status-only change (color, queue_depth) — just the status bar.
       this._renderStatusBar();
     }
   }
 
   _getActiveEntry() {
-    if (!this._wsData) return null;
+    if (!this._wsData || this._wsData.length === 0) return null;
     const entryId = this._config.config_entry_id;  // set by editor dropdown
     if (entryId) {
-      return this._wsData.find(e => e.entry_id === entryId) || this._wsData[0];
+      return this._wsData.find(e => e.entry_id === entryId) || null;
     }
-    return this._wsData[0];
+    return this._wsData[0] || null;
   }
 
   /** Return { config_entry_id } for service calls, or empty object. */
@@ -456,7 +491,8 @@ class SignalLightsCard extends HTMLElement {
       await this._hass.callService(domain, service, data);
       // WS subscription will push the update automatically
     } catch (err) {
-      console.error(`Signal Lights: ${domain}.${service} failed:`, err);
+      console.error(`Signal Lights: ${service} failed:`, err);
+      throw err;  // re-throw so callers can handle
     }
   }
 
@@ -465,6 +501,22 @@ class SignalLightsCard extends HTMLElement {
   _render() {
     const root = this.shadowRoot;
     const title = this._config.title || 'Signal Lights';
+
+    // Show loading state until WS data arrives
+    if (!this._wsData) {
+      root.innerHTML = `
+        <style>${this._styles()}</style>
+        <ha-card header="${_esc(title)}">
+          <div class="card-content">
+            <div class="loading-state">
+              <div class="loading-spinner"></div>
+              <span>Connecting...</span>
+            </div>
+          </div>
+        </ha-card>
+      `;
+      return;
+    }
 
     root.innerHTML = `
       <style>${this._styles()}</style>
@@ -519,7 +571,7 @@ class SignalLightsCard extends HTMLElement {
     container.innerHTML = `
       <div class="status-bar">
         <div class="status-indicator ${activeSignal !== 'none' ? 'active' : 'inactive'}">
-          <span class="status-dot" style="background: ${activeSignal !== 'none' ? 'var(--success-color, #4CAF50)' : 'var(--disabled-color, #9E9E9E)'}"></span>
+          <span class="status-dot" style="background: ${activeSignal !== 'none' ? _esc(this._activeColor || '#4CAF50') : 'var(--disabled-color, #9E9E9E)'}"></span>
           <span class="status-text">${activeSignal !== 'none' ? _esc(activeSignal) : 'No active signal'}</span>
         </div>
         ${activeSignalNames.length > 1 ? `<span class="queue-badge">${activeSignalNames.length} in queue</span>` : ''}
@@ -558,7 +610,7 @@ class SignalLightsCard extends HTMLElement {
         if (this._confirmDelete && this._confirmDelete.type === 'light' && this._confirmDelete.name === entityId) {
           this._callService('signal_lights', 'remove_light', { entity_id: entityId, ...this._entryIdData() }).then(() => {
             this._confirmDelete = null;
-          });
+          }).catch(err => console.error('Signal Lights: remove_light failed:', err));
         } else {
           this._confirmDelete = { type: 'light', name: entityId };
           e.currentTarget.textContent = '⚠️';
@@ -702,7 +754,7 @@ class SignalLightsCard extends HTMLElement {
           this._callService('signal_lights', 'remove_signal', { name, ...this._entryIdData() }).then(() => {
             this._confirmDelete = null;
             this._editingSignal = null;
-          });
+          }).catch(err => console.error('Signal Lights: remove_signal failed:', err));
         } else {
           this._confirmDelete = { type: 'signal', name };
           e.currentTarget.textContent = '⚠️';
@@ -742,9 +794,9 @@ class SignalLightsCard extends HTMLElement {
           <label>Color</label>
           <div class="color-picker-row">
             <div id="sl-edit-sig-color-preview" class="color-preview" style="background:${_esc(hexColor)}"></div>
-            <label>R</label><input type="number" id="sl-edit-sig-color-r" min="0" max="255" value="${color[0]}" class="rgb-input" />
-            <label>G</label><input type="number" id="sl-edit-sig-color-g" min="0" max="255" value="${color[1]}" class="rgb-input" />
-            <label>B</label><input type="number" id="sl-edit-sig-color-b" min="0" max="255" value="${color[2]}" class="rgb-input" />
+            <label>R</label><input type="number" id="sl-edit-sig-color-r" min="0" max="255" value="${_esc(String(color[0]))}" class="rgb-input" />
+            <label>G</label><input type="number" id="sl-edit-sig-color-g" min="0" max="255" value="${_esc(String(color[1]))}" class="rgb-input" />
+            <label>B</label><input type="number" id="sl-edit-sig-color-b" min="0" max="255" value="${_esc(String(color[2]))}" class="rgb-input" />
           </div>
         </div>
         <div class="form-row">
@@ -851,7 +903,7 @@ class SignalLightsCard extends HTMLElement {
       this._callService('signal_lights', 'update_signal', serviceData).then(() => {
         this._editingSignal = null;
         // WS subscription will push the update
-      });
+      }).catch(err => console.error('Signal Lights: update_signal failed:', err));
     });
 
     // Cancel handler
@@ -932,7 +984,7 @@ class SignalLightsCard extends HTMLElement {
         const btn = container.querySelector('#sl-notif-save');
         btn.textContent = '✓ Saved';
         this._setTimeout(() => { btn.textContent = 'Save'; }, 2000);
-      });
+      }).catch(err => console.error('Signal Lights: configure_notifications failed:', err));
     });
   }
 
@@ -985,7 +1037,7 @@ class SignalLightsCard extends HTMLElement {
         }).then(() => {
           this._showAddLight = false;
           form.style.display = 'none';
-        });
+        }).catch(err => console.error('Signal Lights: add_light failed:', err));
       });
 
       form.querySelector('#sl-add-light-cancel').addEventListener('click', () => {
@@ -1113,7 +1165,7 @@ class SignalLightsCard extends HTMLElement {
       }).then(() => {
         this._showAddSignal = false;
         form.style.display = 'none';
-      });
+      }).catch(err => console.error('Signal Lights: add_signal failed:', err));
     });
 
     form.querySelector('#sl-add-signal-cancel').addEventListener('click', () => {
@@ -1324,6 +1376,26 @@ class SignalLightsCard extends HTMLElement {
         text-align: center;
         padding: 16px 0;
         font-style: italic;
+      }
+      .loading-state {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: 32px 0;
+        color: var(--secondary-text-color);
+        font-size: 14px;
+      }
+      .loading-spinner {
+        width: 24px;
+        height: 24px;
+        border: 3px solid var(--divider-color, #e0e0e0);
+        border-top-color: var(--primary-color, #03a9f4);
+        border-radius: 50%;
+        animation: sl-spin 0.8s linear infinite;
+      }
+      @keyframes sl-spin {
+        to { transform: rotate(360deg); }
       }
 
       .inline-form {
