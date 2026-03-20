@@ -1,8 +1,12 @@
 # Signal Lights
 
+[![GitHub Release](https://img.shields.io/github/v/release/prestomation/ha-signal-lights?style=flat-square)](https://github.com/prestomation/ha-signal-lights/releases)
+[![GitHub Downloads](https://img.shields.io/github/downloads/prestomation/ha-signal-lights/total?style=flat-square&label=downloads)](https://github.com/prestomation/ha-signal-lights/releases)
 [![HACS Validation](https://github.com/prestomation/ha-signal-lights/actions/workflows/hacs.yml/badge.svg)](https://github.com/prestomation/ha-signal-lights/actions/workflows/hacs.yml)
-[![Lint](https://github.com/prestomation/ha-signal-lights/actions/workflows/lint.yml/badge.svg)](https://github.com/prestomation/ha-signal-lights/actions/workflows/lint.yml)
-[![Integration Tests](https://github.com/prestomation/ha-signal-lights/actions/workflows/integration.yml/badge.svg)](https://github.com/prestomation/ha-signal-lights/actions/workflows/integration.yml)
+[![Validate](https://github.com/prestomation/ha-signal-lights/actions/workflows/lint.yml/badge.svg)](https://github.com/prestomation/ha-signal-lights/actions/workflows/lint.yml)
+[![Tests](https://github.com/prestomation/ha-signal-lights/actions/workflows/integration.yml/badge.svg)](https://github.com/prestomation/ha-signal-lights/actions/workflows/integration.yml)
+[![License](https://img.shields.io/github/license/prestomation/ha-signal-lights?style=flat-square)](LICENSE)
+[![HA Version](https://img.shields.io/badge/HA-2024.1+-blue?style=flat-square)](https://www.home-assistant.io/)
 
 A Home Assistant custom integration that manages a **priority queue of colored light signals**. Register physical light entities as notification outputs, define signals with colors and priorities, and the engine automatically pushes the highest-priority active signal's color to your lights.
 
