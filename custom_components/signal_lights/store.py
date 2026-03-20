@@ -43,10 +43,16 @@ _LOGGER = logging.getLogger(__name__)
 class SignalLightsStore:
     """Local JSON storage for Signal Lights configuration."""
 
-    def __init__(self, hass: HomeAssistant) -> None:
-        """Initialise (does not touch disk — call load() after creation)."""
+    def __init__(self, hass: HomeAssistant, entry_id: str | None = None) -> None:
+        """Initialise (does not touch disk — call load() after creation).
+
+        entry_id: the config entry ID — used to build a per-entry storage key
+        (signal_lights_{entry_id}). When None (legacy / tests), falls back to
+        the plain STORAGE_KEY so existing data is preserved.
+        """
         self._hass = hass
-        self._store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        storage_key = f"{STORAGE_KEY}_{entry_id}" if entry_id else STORAGE_KEY
+        self._store: Store = Store(hass, STORAGE_VERSION, storage_key)
         self._data: dict[str, Any] = {"lights": [], "signals": []}
 
     def _normalize_signal(self, sig: dict, index: int) -> None:
@@ -197,6 +203,17 @@ class SignalLightsStore:
             self._reindex_sort_order()
             await self.save()
             return True
+        return False
+
+    async def update_signal(self, name: str, updates: dict) -> bool:
+        """Find a signal by name, apply updates dict, and save. Returns True if found."""
+        for sig in self._data["signals"]:
+            if sig["name"] == name:
+                sig.update(updates)
+                # Enforce invariants (defaults, drop legacy fields) after every update
+                self._normalize_signal(sig, sig.get("sort_order", 0))
+                await self.save()
+                return True
         return False
 
     async def reorder_signals(self, ordered_names: list[str]) -> None:
