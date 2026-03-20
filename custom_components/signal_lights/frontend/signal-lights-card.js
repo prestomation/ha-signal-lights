@@ -326,6 +326,7 @@ class SignalLightsCard extends HTMLElement {
     this._editingSignal = null; // name of signal being edited (or null)
     this._editSignalMode = 'entity_equals'; // trigger_mode for the edit form
     this._timers = [];
+    this._wsError = null;       // user-facing error message (e.g. auth failure)
     // Data caches — populated from WS updates
     this._signalsCache = null;
     this._lightsCache = null;
@@ -419,6 +420,12 @@ class SignalLightsCard extends HTMLElement {
       this._wsUnsub = unsub;
     } catch (err) {
       console.error('Signal Lights: WS subscribe failed:', err);
+      // Show user-facing error
+      this._wsError = err.message || 'Connection failed';
+      if (err.code === 'unauthorized' || (err.message && err.message.toLowerCase().includes('unauthorized'))) {
+        this._wsError = 'Admin access required to use this card.';
+      }
+      this._render();
     } finally {
       this._subscribing = false;
     }
@@ -500,11 +507,35 @@ class SignalLightsCard extends HTMLElement {
     }
   }
 
+  _showError(msg) {
+    const toast = this.shadowRoot.getElementById('sl-error-toast');
+    if (!toast) return;
+    toast.textContent = msg;
+    toast.style.display = 'block';
+    this._setTimeout(() => { toast.style.display = 'none'; }, 5000);
+  }
+
   /* ── Rendering ─────────────────────────────────────────────────────── */
 
   _render() {
     const root = this.shadowRoot;
     const title = this._config.title || 'Signal Lights';
+
+    // Show error state (e.g. unauthorized)
+    if (this._wsError) {
+      root.innerHTML = `
+        <style>${this._styles()}</style>
+        <ha-card header="${_esc(title)}">
+          <div class="card-content">
+            <div class="error-state">
+              <span class="error-icon">⚠️</span>
+              <span class="error-text">${_esc(this._wsError)}</span>
+            </div>
+          </div>
+        </ha-card>
+      `;
+      return;
+    }
 
     // Show loading state until WS data arrives
     if (!this._wsData) {
@@ -552,6 +583,7 @@ class SignalLightsCard extends HTMLElement {
             </div>
             <div id="sl-notifications-config"></div>
           </div>
+          <div id="sl-error-toast" class="error-toast" style="display:none"></div>
         </div>
       </ha-card>
     `;
@@ -614,7 +646,7 @@ class SignalLightsCard extends HTMLElement {
         if (this._confirmDelete && this._confirmDelete.type === 'light' && this._confirmDelete.name === entityId) {
           this._callService('signal_lights', 'remove_light', { entity_id: entityId, ...this._entryIdData() }).then(() => {
             this._confirmDelete = null;
-          }).catch(err => console.error('Signal Lights: remove_light failed:', err));
+          }).catch(err => this._showError(`Failed: ${err.message || err}`));
         } else {
           this._confirmDelete = { type: 'light', name: entityId };
           e.currentTarget.textContent = '⚠️';
@@ -758,7 +790,7 @@ class SignalLightsCard extends HTMLElement {
           this._callService('signal_lights', 'remove_signal', { name, ...this._entryIdData() }).then(() => {
             this._confirmDelete = null;
             this._editingSignal = null;
-          }).catch(err => console.error('Signal Lights: remove_signal failed:', err));
+          }).catch(err => this._showError(`Failed: ${err.message || err}`));
         } else {
           this._confirmDelete = { type: 'signal', name };
           e.currentTarget.textContent = '⚠️';
@@ -907,7 +939,7 @@ class SignalLightsCard extends HTMLElement {
       this._callService('signal_lights', 'update_signal', serviceData).then(() => {
         this._editingSignal = null;
         // WS subscription will push the update
-      }).catch(err => console.error('Signal Lights: update_signal failed:', err));
+      }).catch(err => this._showError(`Failed: ${err.message || err}`));
     });
 
     // Cancel handler
@@ -988,7 +1020,7 @@ class SignalLightsCard extends HTMLElement {
         const btn = container.querySelector('#sl-notif-save');
         btn.textContent = '✓ Saved';
         this._setTimeout(() => { btn.textContent = 'Save'; }, 2000);
-      }).catch(err => console.error('Signal Lights: configure_notifications failed:', err));
+      }).catch(err => this._showError(`Failed: ${err.message || err}`));
     });
   }
 
@@ -1041,7 +1073,7 @@ class SignalLightsCard extends HTMLElement {
         }).then(() => {
           this._showAddLight = false;
           form.style.display = 'none';
-        }).catch(err => console.error('Signal Lights: add_light failed:', err));
+        }).catch(err => this._showError(`Failed: ${err.message || err}`));
       });
 
       form.querySelector('#sl-add-light-cancel').addEventListener('click', () => {
@@ -1169,7 +1201,7 @@ class SignalLightsCard extends HTMLElement {
       }).then(() => {
         this._showAddSignal = false;
         form.style.display = 'none';
-      }).catch(err => console.error('Signal Lights: add_signal failed:', err));
+      }).catch(err => this._showError(`Failed: ${err.message || err}`));
     });
 
     form.querySelector('#sl-add-signal-cancel').addEventListener('click', () => {
@@ -1191,6 +1223,7 @@ class SignalLightsCard extends HTMLElement {
       }
       .card-content {
         padding: 0 16px 16px;
+        position: relative;
       }
       .status-bar {
         display: flex;
@@ -1579,6 +1612,31 @@ class SignalLightsCard extends HTMLElement {
         font-size: 11px;
         color: var(--secondary-text-color);
         margin-top: 4px;
+      }
+      .error-state {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 24px 0;
+        color: var(--error-color, #F44336);
+        font-size: 14px;
+      }
+      .error-icon {
+        font-size: 24px;
+      }
+      .error-toast {
+        position: absolute;
+        bottom: 8px;
+        left: 8px;
+        right: 8px;
+        padding: 8px 12px;
+        background: var(--error-color, #F44336);
+        color: white;
+        border-radius: 6px;
+        font-size: 12px;
+        z-index: 10;
+        text-align: center;
       }
     `;
   }
