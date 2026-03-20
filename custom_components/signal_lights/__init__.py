@@ -141,7 +141,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Register frontend resources
     await _ensure_frontend_registered(hass)
 
-    store = SignalLightsStore(hass)
+    store = SignalLightsStore(hass, entry.entry_id)
     await store.load()
 
     coordinator = SignalLightsCoordinator(hass, entry, store)

@@ -65,15 +65,57 @@ class SignalLightsCardEditor extends HTMLElement {
     this._render();
   }
 
-  set hass(h) { this.__hass = h; }
+  set hass(h) {
+    this.__hass = h;
+    this._render();
+  }
+
+  /** Detect Signal Lights config entry IDs by scanning known sensor entities. */
+  _detectEntries() {
+    if (!this.__hass) return [];
+    const states = this.__hass.states;
+    const seen = new Map(); // entry_id -> label
+    for (const eid of Object.keys(states)) {
+      // Sensors are named sensor.<entry_title_slug>_active_signal
+      if (eid.endsWith('_active_signal')) {
+        const attrs = states[eid].attributes;
+        // entry_id is stored in the device identifiers — not directly visible here.
+        // Use a heuristic: collect entity IDs that match _active_signal and try to
+        // derive a display label from the entity name.
+        const label = attrs.friendly_name || eid;
+        seen.set(eid, label);
+      }
+    }
+    return Array.from(seen.entries()).map(([eid, label]) => ({ eid, label }));
+  }
 
   _render() {
     if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
+    const entries = this._detectEntries();
+    const showSelector = entries.length > 1;
+    const currentEntry = this._config.config_entry_id || '';
+
+    let selectorHtml = '';
+    if (showSelector) {
+      const options = entries.map(e =>
+        `<option value="${_esc(e.eid)}" ${currentEntry === e.eid ? 'selected' : ''}>${_esc(e.label)}</option>`
+      ).join('');
+      selectorHtml = `
+        <div>
+          <label>Setup (which Signal Lights instance to show)</label>
+          <select name="config_entry_id">
+            <option value="">Auto-detect (first found)</option>
+            ${options}
+          </select>
+        </div>
+      `;
+    }
+
     this.shadowRoot.innerHTML = `
       <style>
         .form { display: flex; flex-direction: column; gap: 12px; padding: 8px 0; }
         label { font-size: 12px; color: var(--secondary-text-color); margin-bottom: 2px; display: block; }
-        input {
+        input, select {
           width: 100%; box-sizing: border-box; padding: 8px 10px;
           border: 1px solid var(--divider-color); border-radius: 6px;
           background: var(--card-background-color); color: var(--primary-text-color); font-size: 14px;
@@ -85,10 +127,11 @@ class SignalLightsCardEditor extends HTMLElement {
           <label>Title (optional)</label>
           <input name="title" value="${_esc(this._config.title || '')}" placeholder="Signal Lights" />
         </div>
-        <div class="hint">No additional configuration needed. The card automatically connects to the Signal Lights integration.</div>
+        ${selectorHtml}
+        <div class="hint">${showSelector ? 'Multiple Signal Lights setups detected. Select which one to display.' : 'No additional configuration needed. The card automatically connects to the Signal Lights integration.'}</div>
       </div>
     `;
-    this.shadowRoot.querySelectorAll('input').forEach(el => {
+    this.shadowRoot.querySelectorAll('input, select').forEach(el => {
       el.addEventListener('change', () => this._valueChanged());
     });
   }
@@ -100,6 +143,14 @@ class SignalLightsCardEditor extends HTMLElement {
       newConfig.title = titleEl.value.trim();
     } else {
       delete newConfig.title;
+    }
+    const entryEl = this.shadowRoot.querySelector('select[name="config_entry_id"]');
+    if (entryEl) {
+      if (entryEl.value) {
+        newConfig.config_entry_id = entryEl.value;
+      } else {
+        delete newConfig.config_entry_id;
+      }
     }
     this.dispatchEvent(new CustomEvent('config-changed', {
       detail: { config: newConfig }, bubbles: true, composed: true,
@@ -178,18 +229,34 @@ class SignalLightsCard extends HTMLElement {
   }
 
   _getCoordData() {
-    // Get data from the active_signal sensor's attributes and coordinator data
+    // Get data from the active_signal sensor's attributes and coordinator data.
+    // If config_entry_id is set in card config, use it to filter to the right entity.
     if (!this._hass) return null;
     const states = this._hass.states;
-    // Find the active signal sensor
+    const configEntryId = this._config.config_entry_id || null;
     let activeEntity = null;
     for (const eid of Object.keys(states)) {
-      if (eid.includes('signal_lights_active_signal')) {
-        activeEntity = states[eid];
-        break;
+      if (eid.endsWith('_active_signal')) {
+        // If we have a config_entry_id, match it via entry_id attribute (if present)
+        const attrs = states[eid].attributes || {};
+        if (configEntryId) {
+          if (attrs.entry_id === configEntryId || eid === configEntryId) {
+            activeEntity = states[eid];
+            break;
+          }
+        } else {
+          activeEntity = states[eid];
+          break;
+        }
       }
     }
     return activeEntity;
+  }
+
+  /** Return the config_entry_id to include in service calls (or empty object). */
+  _entryIdData() {
+    const id = this._config.config_entry_id;
+    return id ? { config_entry_id: id } : {};
   }
 
   async _callService(domain, service, data) {
@@ -328,7 +395,7 @@ class SignalLightsCard extends HTMLElement {
       btn.addEventListener('click', (e) => {
         const entityId = e.currentTarget.dataset.entity;
         if (this._confirmDelete && this._confirmDelete.type === 'light' && this._confirmDelete.name === entityId) {
-          this._callService('signal_lights', 'remove_light', { entity_id: entityId }).then(() => {
+          this._callService('signal_lights', 'remove_light', { entity_id: entityId, ...this._entryIdData() }).then(() => {
             this._confirmDelete = null;
             this._fetchConfig();
           });
@@ -423,7 +490,7 @@ class SignalLightsCard extends HTMLElement {
           const names = this._signalsCache.map(s => s.name);
           const [moved] = names.splice(fromIndex, 1);
           names.splice(toIndex, 0, moved);
-          this._callService('signal_lights', 'reorder_signals', { order: names }).then(() => {
+          this._callService('signal_lights', 'reorder_signals', { order: names, ...this._entryIdData() }).then(() => {
             this._fetchConfig();
           });
         }
@@ -434,13 +501,13 @@ class SignalLightsCard extends HTMLElement {
     // Action buttons
     container.querySelectorAll('.btn-trigger').forEach(btn => {
       btn.addEventListener('click', (e) => {
-        this._callService('signal_lights', 'trigger_signal', { name: e.currentTarget.dataset.name });
+        this._callService('signal_lights', 'trigger_signal', { name: e.currentTarget.dataset.name, ...this._entryIdData() });
       });
     });
 
     container.querySelectorAll('.btn-dismiss').forEach(btn => {
       btn.addEventListener('click', (e) => {
-        this._callService('signal_lights', 'dismiss_signal', { name: e.currentTarget.dataset.name });
+        this._callService('signal_lights', 'dismiss_signal', { name: e.currentTarget.dataset.name, ...this._entryIdData() });
       });
     });
 
@@ -448,7 +515,7 @@ class SignalLightsCard extends HTMLElement {
       btn.addEventListener('click', (e) => {
         const name = e.currentTarget.dataset.name;
         if (this._confirmDelete && this._confirmDelete.type === 'signal' && this._confirmDelete.name === name) {
-          this._callService('signal_lights', 'remove_signal', { name }).then(() => {
+          this._callService('signal_lights', 'remove_signal', { name, ...this._entryIdData() }).then(() => {
             this._confirmDelete = null;
             this._fetchConfig();
           });
@@ -508,6 +575,7 @@ class SignalLightsCard extends HTMLElement {
       this._callService('signal_lights', 'configure_notifications', {
         enabled,
         targets: targetsList,
+        ...this._entryIdData(),
       }).then(() => {
         this._notificationsCache = { enabled, targets: targetsList };
         const btn = container.querySelector('#sl-notif-save');
@@ -563,6 +631,7 @@ class SignalLightsCard extends HTMLElement {
         this._callService('signal_lights', 'add_light', {
           entity_id: entityId,
           brightness,
+          ...this._entryIdData(),
         }).then(() => {
           this._showAddLight = false;
           form.style.display = 'none';
@@ -782,6 +851,7 @@ class SignalLightsCard extends HTMLElement {
         trigger_config: triggerConfig,
         template,
         duration,
+        ...this._entryIdData(),
       }).then(() => {
         this._showAddSignal = false;
         form.style.display = 'none';
@@ -804,7 +874,7 @@ class SignalLightsCard extends HTMLElement {
     try {
       // Try to read coordinator data via a refresh + sensor attributes
       // The simplest approach: call refresh service, then read sensor state
-      await this._callService('signal_lights', 'refresh', {});
+      await this._callService('signal_lights', 'refresh', { ...this._entryIdData() });
 
       // Wait a tick for state to update
       await new Promise(r => setTimeout(r, 200));

@@ -45,10 +45,6 @@ class SignalLightsConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             name = user_input.get("name", "Signal Lights").strip() or "Signal Lights"
 
-            # Prevent duplicate config entries
-            await self.async_set_unique_id("signal_lights_instance")
-            self._abort_if_unique_id_configured()
-
             return self.async_create_entry(
                 title=name,
                 data={"name": name},
