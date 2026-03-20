@@ -169,6 +169,87 @@ add_signal:
       selector:
         text:
 
+update_signal:
+  name: Update Signal
+  description: >
+    Update an existing signal's properties. Only the fields you provide will be changed;
+    unspecified fields remain as-is.
+  fields:
+    name:
+      name: Signal Name
+      description: The name of the signal to update (used to identify it).
+      required: true
+      selector:
+        text:
+    new_name:
+      name: New Name
+      description: Rename the signal to this new name (must be unique).
+      required: false
+      selector:
+        text:
+    color:
+      name: Color (RGB)
+      description: "New RGB color as a list of 3 integers [R, G, B], each 0-255."
+      required: false
+      selector:
+        object:
+    trigger_type:
+      name: Trigger Type
+      description: "'event' (fires for a duration) or 'condition' (active while template is true)."
+      required: false
+      selector:
+        select:
+          options:
+            - event
+            - condition
+    trigger_mode:
+      name: Trigger Mode
+      description: "How the signal is triggered: entity_equals, entity_on, numeric_threshold, or template."
+      required: false
+      selector:
+        select:
+          options:
+            - entity_equals
+            - entity_on
+            - numeric_threshold
+            - template
+    trigger_config:
+      name: Trigger Configuration
+      description: "Configuration for the trigger mode (entity_id, state, threshold, direction)."
+      required: false
+      selector:
+        object:
+    template:
+      name: Template
+      description: "Jinja2 template override (auto-generated from trigger_mode if not provided)."
+      required: false
+      selector:
+        template:
+    duration:
+      name: Duration (seconds)
+      description: "How long an event signal stays active (event type only)."
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 86400
+          mode: box
+          unit_of_measurement: seconds
+    light_filter:
+      name: Light Filter
+      description: "Optional list of light entity IDs this signal applies to. Empty = all lights."
+      required: false
+      selector:
+        entity:
+          domain: light
+          multiple: true
+    config_entry_id:
+      name: Setup (config entry ID)
+      description: Target Signal Lights setup. Optional when only one setup exists.
+      required: false
+      selector:
+        text:
+
 remove_signal:
   name: Remove Signal
   description: Remove a signal definition by name.

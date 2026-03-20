@@ -205,6 +205,15 @@ class SignalLightsStore:
             return True
         return False
 
+    async def update_signal(self, name: str, updates: dict) -> bool:
+        """Find a signal by name, apply updates dict, and save. Returns True if found."""
+        for sig in self._data["signals"]:
+            if sig["name"] == name:
+                sig.update(updates)
+                await self.save()
+                return True
+        return False
+
     async def reorder_signals(self, ordered_names: list[str]) -> None:
         """Reorder signals by a list of signal names. Re-indexes sort_order."""
         name_to_signal = {s["name"]: s for s in self._data["signals"]}

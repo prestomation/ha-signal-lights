@@ -10,6 +10,12 @@
       }
     }
   },
+  "services": {
+    "update_signal": {
+      "name": "Update Signal",
+      "description": "Update an existing signal's properties. Only provided fields are changed."
+    }
+  },
   "options": {
     "step": {
       "init": {

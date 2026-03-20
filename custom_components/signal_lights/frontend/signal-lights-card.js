@@ -1,7 +1,7 @@
 /**
  * Signal Lights Card — Configuration and status dashboard for Home Assistant
  * Bundled with the Signal Lights integration — no manual setup required.
- * Version: 1.1.0
+ * Version: 1.4.0
  */
 
 /* ── Card picker registration ───────────────────────────────────────────── */
@@ -62,19 +62,20 @@ class SignalLightsCardEditor extends HTMLElement {
 
   setConfig(config) {
     this._config = { ...config };
-    this._render();
+    if (this.__hass) this._render(); // re-render if hass is already available
   }
 
   set hass(h) {
     const prev = this.__hass;
     this.__hass = h;
-    if (!prev || !this._config || Object.keys(this._config).length === 0) return;
-    // Only re-render if the set of _active_signal entities changed
-    const prevKeys = Object.keys(prev.states).filter(k => k.endsWith('_active_signal')).sort().join(',');
-    const newKeys = Object.keys(h.states).filter(k => k.endsWith('_active_signal')).sort().join(',');
-    if (prevKeys !== newKeys) {
-      this._render();
+    if (!this._config) return; // no config yet, wait for setConfig
+    if (prev) {
+      // Subsequent updates — only re-render if active_signal entities changed
+      const prevKeys = Object.keys(prev.states).filter(k => k.endsWith('_active_signal')).sort().join(',');
+      const newKeys = Object.keys(h.states).filter(k => k.endsWith('_active_signal')).sort().join(',');
+      if (prevKeys === newKeys) return;
     }
+    this._render();
   }
 
   /** Detect Signal Lights config entries by scanning _active_signal sensor entities. */
@@ -92,7 +93,9 @@ class SignalLightsCardEditor extends HTMLElement {
         seen.set(entryId, label);
       }
     }
-    return Array.from(seen.entries()).map(([entryId, label]) => ({ eid: entryId, label }));
+    const entries = Array.from(seen.entries()).map(([entryId, label]) => ({ eid: entryId, label }));
+    console.log('[SignalLights] _detectEntries found:', entries.length, entries.map(e => e.eid));
+    return entries;
   }
 
   _render() {
@@ -133,8 +136,12 @@ class SignalLightsCardEditor extends HTMLElement {
           <label>Title (optional)</label>
           <input name="title" value="${_esc(this._config.title || '')}" placeholder="Signal Lights" />
         </div>
+        <div>
+          <label>Entity (optional — auto-detected if blank)</label>
+          <input name="entity" value="${_esc(this._config.entity || '')}" placeholder="sensor.signal_lights_active_signal" />
+        </div>
         ${selectorHtml}
-        <div class="hint">${showSelector ? 'Multiple Signal Lights setups detected. Select which one to display.' : 'No additional configuration needed. The card automatically connects to the Signal Lights integration.'}</div>
+        <div class="hint">${showSelector ? 'Multiple Signal Lights setups detected. Select which one to display, or set entity directly.' : 'Leave entity blank for auto-detection, or set a specific active_signal sensor.'}</div>
       </div>
     `;
     this.shadowRoot.querySelectorAll('input, select').forEach(el => {
@@ -149,6 +156,12 @@ class SignalLightsCardEditor extends HTMLElement {
       newConfig.title = titleEl.value.trim();
     } else {
       delete newConfig.title;
+    }
+    const entityEl = this.shadowRoot.querySelector('input[name="entity"]');
+    if (entityEl && entityEl.value.trim()) {
+      newConfig.entity = entityEl.value.trim();
+    } else {
+      delete newConfig.entity;
     }
     const entryEl = this.shadowRoot.querySelector('select[name="config_entry_id"]');
     if (entryEl) {
@@ -179,6 +192,8 @@ class SignalLightsCard extends HTMLElement {
     this._showAddLight = false;
     this._addSignalMode = 'entity_equals';
     this._confirmDelete = null; // { type: 'signal'|'light', name: string }
+    this._editingSignal = null; // name of signal being edited (or null)
+    this._editSignalMode = 'entity_equals'; // trigger_mode for the edit form
     this._timers = [];
   }
 
@@ -236,16 +251,23 @@ class SignalLightsCard extends HTMLElement {
 
   _getCoordData() {
     // Get data from the active_signal sensor's attributes and coordinator data.
-    // If config_entry_id is set in card config, use it to filter to the right entity.
+    // Priority: 1) explicit "entity" in YAML config, 2) config_entry_id match, 3) first found
     if (!this._hass) return null;
     const states = this._hass.states;
+
+    // 1) Direct entity reference from YAML config (e.g. entity: sensor.signal_lights_active_signal)
+    const directEntity = this._config.entity;
+    if (directEntity && states[directEntity]) {
+      return states[directEntity];
+    }
+
+    // 2) Match by config_entry_id (from editor dropdown)
     const configEntryId = this._config.config_entry_id || null;
     let activeEntity = null;
     for (const eid of Object.keys(states)) {
       if (eid.endsWith('_active_signal')) {
         const attrs = states[eid].attributes || {};
         if (configEntryId) {
-          // Match against the real config entry UUID stored in attrs.entry_id
           if (attrs.entry_id === configEntryId) {
             activeEntity = states[eid];
             break;
@@ -262,10 +284,18 @@ class SignalLightsCard extends HTMLElement {
   /** Return the config_entry_id to include in service calls (or empty object).
    *  Only includes it when the value looks like a real HA config entry ULID. */
   _entryIdData() {
+    // Try explicit config_entry_id first
     const id = this._config.config_entry_id;
-    // HA entry IDs are 26-char uppercase alphanumeric ULIDs
     if (id && /^[0-9A-Z]{26}$/.test(id)) {
       return { config_entry_id: id };
+    }
+    // Fall back to reading entry_id from the resolved entity's attributes
+    const data = this._getCoordData();
+    if (data) {
+      const entryId = (data.attributes || {}).entry_id;
+      if (entryId && /^[0-9A-Z]{26}$/.test(entryId)) {
+        return { config_entry_id: entryId };
+      }
     }
     return {};
   }
@@ -448,10 +478,11 @@ class SignalLightsCard extends HTMLElement {
       const color = _rgbToHex(s.color || [255, 255, 255]);
       const typeBadge = s.trigger_type === 'event' ? '⚡' : '🔄';
       const triggerDesc = _triggerDescription(s);
+      const isEditing = this._editingSignal === s.name;
 
       return `
-        <div class="item-row signal-row ${isActive ? 'signal-active' : ''}"
-             draggable="true" data-index="${i}" data-name="${_esc(s.name)}">
+        <div class="item-row signal-row ${isActive ? 'signal-active' : ''} ${isEditing ? 'signal-editing' : ''}"
+             draggable="${isEditing ? 'false' : 'true'}" data-index="${i}" data-name="${_esc(s.name)}">
           <span class="drag-handle" title="Drag to reorder">⠿</span>
           <span class="color-swatch" style="background: ${color}" title="${_esc(color)}"></span>
           <div class="signal-info">
@@ -461,14 +492,25 @@ class SignalLightsCard extends HTMLElement {
           <div class="signal-actions">
             ${s.trigger_type === 'event' ? `<button class="btn-small btn-trigger" data-name="${_esc(s.name)}" title="Trigger">▶</button>` : ''}
             ${isActive ? `<button class="btn-small btn-dismiss" data-name="${_esc(s.name)}" title="Dismiss">⏹</button>` : ''}
+            <button class="btn-small btn-edit" data-name="${_esc(s.name)}" title="Edit signal">✏️</button>
             <button class="btn-remove" data-name="${_esc(s.name)}" title="Remove signal">✕</button>
           </div>
         </div>
+        ${isEditing ? `<div class="edit-signal-form-container" data-edit-name="${_esc(s.name)}"></div>` : ''}
       `;
     }).join('');
 
+    // Inject edit form for the signal being edited
+    if (this._editingSignal) {
+      const editSignal = signals.find(s => s.name === this._editingSignal);
+      const formContainer = container.querySelector(`.edit-signal-form-container[data-edit-name="${CSS.escape(this._editingSignal)}"]`);
+      if (editSignal && formContainer) {
+        this._renderEditSignalForm(formContainer, editSignal);
+      }
+    }
+
     // Drag-to-reorder events
-    const rows = container.querySelectorAll('.signal-row[draggable]');
+    const rows = container.querySelectorAll('.signal-row[draggable="true"]');
     rows.forEach(row => {
       row.addEventListener('dragstart', (e) => {
         this._dragSrcIndex = parseInt(e.currentTarget.dataset.index);
@@ -522,12 +564,29 @@ class SignalLightsCard extends HTMLElement {
       });
     });
 
+    container.querySelectorAll('.btn-edit').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const name = e.currentTarget.dataset.name;
+        if (this._editingSignal === name) {
+          // Toggle off
+          this._editingSignal = null;
+        } else {
+          const sig = signals.find(s => s.name === name);
+          this._editingSignal = name;
+          this._editSignalMode = sig ? (sig.trigger_mode || 'entity_equals') : 'entity_equals';
+        }
+        // Re-render just the signals list
+        this._renderSignals(activeSignals);
+      });
+    });
+
     container.querySelectorAll('.btn-remove').forEach(btn => {
       btn.addEventListener('click', (e) => {
         const name = e.currentTarget.dataset.name;
         if (this._confirmDelete && this._confirmDelete.type === 'signal' && this._confirmDelete.name === name) {
           this._callService('signal_lights', 'remove_signal', { name, ...this._entryIdData() }).then(() => {
             this._confirmDelete = null;
+            this._editingSignal = null;
             this._fetchConfig();
           });
         } else {
@@ -541,6 +600,238 @@ class SignalLightsCard extends HTMLElement {
           }, 3000);
         }
       });
+    });
+  }
+
+  /* ── Edit signal form ──────────────────────────────────────────────── */
+
+  _renderEditSignalForm(container, signal) {
+    const mode = this._editSignalMode;
+    const cfg = signal.trigger_config || {};
+    const color = signal.color || [255, 0, 0];
+    const hexColor = _rgbToHex(color);
+
+    let triggerFields = '';
+    switch (mode) {
+      case 'entity_equals':
+        triggerFields = `
+          <div class="form-row">
+            <label>Entity</label>
+            <div id="sl-edit-sig-entity-container" class="entity-picker-container"></div>
+          </div>
+          <div class="form-row">
+            <label>Target state</label>
+            <input type="text" id="sl-edit-sig-state" value="${_esc(cfg.state || '')}" placeholder="on" />
+          </div>
+        `;
+        break;
+      case 'entity_on':
+        triggerFields = `
+          <div class="form-row">
+            <label>Entity</label>
+            <div id="sl-edit-sig-entity-container" class="entity-picker-container"></div>
+          </div>
+        `;
+        break;
+      case 'numeric_threshold':
+        triggerFields = `
+          <div class="form-row">
+            <label>Sensor entity</label>
+            <div id="sl-edit-sig-entity-container" class="entity-picker-container"></div>
+          </div>
+          <div class="form-row">
+            <label>Threshold</label>
+            <input type="number" id="sl-edit-sig-threshold" value="${_esc(String(cfg.threshold !== undefined ? cfg.threshold : 0))}" />
+          </div>
+          <div class="form-row">
+            <label>Direction</label>
+            <select id="sl-edit-sig-direction">
+              <option value="above" ${cfg.direction !== 'below' ? 'selected' : ''}>Above</option>
+              <option value="below" ${cfg.direction === 'below' ? 'selected' : ''}>Below</option>
+            </select>
+          </div>
+        `;
+        break;
+      case 'template':
+        triggerFields = `
+          <div class="form-row">
+            <label>Jinja2 Template</label>
+            <textarea id="sl-edit-sig-template" rows="3">${_esc(signal.template || cfg.template || '')}</textarea>
+          </div>
+        `;
+        break;
+    }
+
+    const isEvent = signal.trigger_type === 'event';
+
+    container.innerHTML = `
+      <div class="edit-form-inner">
+        <div class="form-row">
+          <label>Signal name</label>
+          <input type="text" id="sl-edit-sig-name" value="${_esc(signal.name)}" />
+        </div>
+        <div class="form-row">
+          <label>Color</label>
+          <div class="color-picker-row">
+            <div id="sl-edit-sig-color-preview" class="color-preview" style="background:${_esc(hexColor)}"></div>
+            <label>R</label><input type="number" id="sl-edit-sig-color-r" min="0" max="255" value="${color[0]}" class="rgb-input" />
+            <label>G</label><input type="number" id="sl-edit-sig-color-g" min="0" max="255" value="${color[1]}" class="rgb-input" />
+            <label>B</label><input type="number" id="sl-edit-sig-color-b" min="0" max="255" value="${color[2]}" class="rgb-input" />
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Trigger type</label>
+          <select id="sl-edit-sig-trigger-type">
+            <option value="condition" ${signal.trigger_type === 'condition' ? 'selected' : ''}>Condition (active while true)</option>
+            <option value="event" ${signal.trigger_type === 'event' ? 'selected' : ''}>Event (fires for a duration)</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Trigger mode</label>
+          <select id="sl-edit-sig-trigger-mode">
+            <option value="entity_equals" ${mode === 'entity_equals' ? 'selected' : ''}>Entity equals state</option>
+            <option value="entity_on" ${mode === 'entity_on' ? 'selected' : ''}>Entity is on</option>
+            <option value="numeric_threshold" ${mode === 'numeric_threshold' ? 'selected' : ''}>Numeric above/below</option>
+            <option value="template" ${mode === 'template' ? 'selected' : ''}>Template (advanced)</option>
+          </select>
+        </div>
+        ${triggerFields}
+        <div class="form-row" id="sl-edit-sig-duration-row" style="display:${isEvent ? 'block' : 'none'}">
+          <label>Duration (seconds)</label>
+          <input type="number" id="sl-edit-sig-duration" value="${signal.duration || 60}" min="1" max="86400" />
+        </div>
+        <div class="form-actions">
+          <button class="btn-primary" id="sl-edit-sig-save">Save</button>
+          <button class="btn-secondary" id="sl-edit-sig-cancel">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    // Inject entity picker if needed
+    const entityContainer = container.querySelector('#sl-edit-sig-entity-container');
+    if (entityContainer) {
+      const entityPicker = document.createElement('ha-entity-picker');
+      entityPicker.hass = this._hass;
+      entityPicker.allowCustomEntity = true;
+      entityPicker.id = 'sl-edit-sig-entity';
+      if (mode === 'entity_on') {
+        entityPicker.includeDomains = ['binary_sensor', 'switch', 'light', 'input_boolean'];
+      } else if (mode === 'numeric_threshold') {
+        entityPicker.includeDomains = ['sensor'];
+      }
+      // Pre-populate the picker value
+      entityPicker.value = cfg.entity_id || '';
+      entityContainer.appendChild(entityPicker);
+    }
+
+    // Trigger mode change — re-render form with new mode
+    container.querySelector('#sl-edit-sig-trigger-mode').addEventListener('change', (e) => {
+      this._editSignalMode = e.target.value;
+      // Preserve current field values before re-rendering
+      const updatedSignal = { ...signal };
+      const nameEl = container.querySelector('#sl-edit-sig-name');
+      if (nameEl) updatedSignal._editName = nameEl.value;
+      this._renderEditSignalForm(container, updatedSignal);
+    });
+
+    // Trigger type change — show/hide duration
+    const typeSelect = container.querySelector('#sl-edit-sig-trigger-type');
+    const durationRow = container.querySelector('#sl-edit-sig-duration-row');
+    typeSelect.addEventListener('change', () => {
+      durationRow.style.display = typeSelect.value === 'event' ? 'block' : 'none';
+    });
+
+    // Live color preview
+    const colorPreview = container.querySelector('#sl-edit-sig-color-preview');
+    ['r', 'g', 'b'].forEach(ch => {
+      container.querySelector(`#sl-edit-sig-color-${ch}`).addEventListener('input', () => {
+        const r = container.querySelector('#sl-edit-sig-color-r').value || 0;
+        const g = container.querySelector('#sl-edit-sig-color-g').value || 0;
+        const b = container.querySelector('#sl-edit-sig-color-b').value || 0;
+        colorPreview.style.background = `rgb(${r},${g},${b})`;
+      });
+    });
+
+    // Save handler
+    container.querySelector('#sl-edit-sig-save').addEventListener('click', () => {
+      const newName = container.querySelector('#sl-edit-sig-name').value.trim();
+      if (!newName) return;
+
+      const newColor = [
+        parseInt(container.querySelector('#sl-edit-sig-color-r').value) || 0,
+        parseInt(container.querySelector('#sl-edit-sig-color-g').value) || 0,
+        parseInt(container.querySelector('#sl-edit-sig-color-b').value) || 0,
+      ];
+      const newTriggerType = container.querySelector('#sl-edit-sig-trigger-type').value;
+      const newTriggerMode = container.querySelector('#sl-edit-sig-trigger-mode').value;
+      const newDuration = newTriggerType === 'event'
+        ? parseInt(container.querySelector('#sl-edit-sig-duration').value || '60')
+        : 0;
+
+      let newTriggerConfig = {};
+      let newTemplate = '';
+
+      switch (newTriggerMode) {
+        case 'entity_equals': {
+          const entityPicker = container.querySelector('#sl-edit-sig-entity');
+          const entityId = entityPicker ? (entityPicker.value || '').trim() : '';
+          const state = container.querySelector('#sl-edit-sig-state').value.trim();
+          newTriggerConfig = { entity_id: entityId, state };
+          break;
+        }
+        case 'entity_on': {
+          const entityPicker = container.querySelector('#sl-edit-sig-entity');
+          const entityId = entityPicker ? (entityPicker.value || '').trim() : '';
+          newTriggerConfig = { entity_id: entityId };
+          break;
+        }
+        case 'numeric_threshold': {
+          const entityPicker = container.querySelector('#sl-edit-sig-entity');
+          const entityId = entityPicker ? (entityPicker.value || '').trim() : '';
+          const threshold = parseFloat(container.querySelector('#sl-edit-sig-threshold').value || '0');
+          const direction = container.querySelector('#sl-edit-sig-direction').value;
+          newTriggerConfig = { entity_id: entityId, threshold, direction };
+          break;
+        }
+        case 'template': {
+          newTemplate = container.querySelector('#sl-edit-sig-template').value.trim();
+          newTriggerConfig = { template: newTemplate };
+          break;
+        }
+      }
+
+      const serviceData = {
+        name: signal.name,
+        color: newColor,
+        trigger_type: newTriggerType,
+        trigger_mode: newTriggerMode,
+        trigger_config: newTriggerConfig,
+        duration: newDuration,
+        ...this._entryIdData(),
+      };
+      if (newTriggerMode === 'template') {
+        serviceData.template = newTemplate;
+      }
+      if (newName !== signal.name) {
+        serviceData.new_name = newName;
+      }
+
+      this._callService('signal_lights', 'update_signal', serviceData).then(() => {
+        this._editingSignal = null;
+        this._fetchConfig();
+      });
+    });
+
+    // Cancel handler
+    container.querySelector('#sl-edit-sig-cancel').addEventListener('click', () => {
+      this._editingSignal = null;
+      // Re-render signals list without edit form
+      const sigContainer = this.shadowRoot.getElementById('sl-signals-list');
+      if (sigContainer && this._signalsCache) {
+        const activeEntity = this._getCoordData();
+        const activeSignals = activeEntity ? (activeEntity.attributes.active_signals || []) : [];
+        this._renderSignalsList(sigContainer, this._signalsCache, activeSignals);
+      }
     });
   }
 
@@ -1257,6 +1548,22 @@ class SignalLightsCard extends HTMLElement {
         color: var(--primary-text-color);
         font-size: 13px;
         cursor: pointer;
+      }
+
+      .signal-editing {
+        border: 1px solid var(--primary-color, #03A9F4) !important;
+        background: color-mix(in srgb, var(--primary-color, #03A9F4) 5%, var(--secondary-background-color, #f5f5f5)) !important;
+      }
+      .edit-signal-form-container {
+        margin: 2px 0 4px 0;
+      }
+      .edit-form-inner {
+        padding: 12px;
+        border-radius: var(--sl-radius);
+        background: var(--secondary-background-color, #f5f5f5);
+        border: 1px solid var(--primary-color, #03A9F4);
+        border-top: none;
+        border-radius: 0 0 var(--sl-radius) var(--sl-radius);
       }
 
       .notif-form {

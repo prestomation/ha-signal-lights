@@ -120,6 +120,25 @@ REMOVE_SIGNAL_SCHEMA = vol.Schema(
     }
 )
 
+UPDATE_SIGNAL_SCHEMA = vol.Schema(
+    {
+        vol.Required("name"): cv.string,
+        vol.Optional("new_name"): cv.string,
+        vol.Optional("color"): vol.All(
+            [vol.Coerce(int)], vol.Length(min=3, max=3)
+        ),
+        vol.Optional("trigger_type"): vol.In(["event", "condition"]),
+        vol.Optional("trigger_mode"): vol.In(
+            ["entity_equals", "entity_on", "numeric_threshold", "template"]
+        ),
+        vol.Optional("trigger_config"): _TRIGGER_CONFIG_SCHEMA,
+        vol.Optional("template"): cv.string,
+        vol.Optional("duration"): vol.Coerce(int),
+        vol.Optional("light_filter"): [cv.entity_id],
+        **_ENTRY_ID_FIELD,
+    }
+)
+
 REORDER_SIGNALS_SCHEMA = vol.Schema(
     {
         vol.Required("order"): [cv.string],
@@ -442,6 +461,101 @@ async def async_register_services(hass: HomeAssistant) -> None:
         DOMAIN, "remove_signal", handle_remove_signal, schema=REMOVE_SIGNAL_SCHEMA
     )
 
+    async def handle_update_signal(call: ServiceCall) -> None:
+        """Handle signal_lights.update_signal."""
+        coord = _resolve_coordinator(hass, call)
+        if coord is None:
+            return
+        name = call.data["name"]
+
+        # Find the existing signal first
+        existing = coord.store.get_signal_by_name(name)
+        if existing is None:
+            _LOGGER.warning(
+                "signal_lights.update_signal: signal '%s' not found", name
+            )
+            return
+
+        updates: dict = {}
+
+        # Handle rename
+        if "new_name" in call.data:
+            new_name = call.data["new_name"]
+            # Check for collision only if name actually changed
+            if new_name != name and coord.store.get_signal_by_name(new_name) is not None:
+                _LOGGER.error(
+                    "Signal Lights: update_signal — a signal named '%s' already exists", new_name
+                )
+                return
+            updates["name"] = new_name
+
+        if "color" in call.data:
+            updates["color"] = list(call.data["color"])
+        if "trigger_type" in call.data:
+            updates["trigger_type"] = call.data["trigger_type"]
+        if "duration" in call.data:
+            updates["duration"] = call.data["duration"]
+        if "light_filter" in call.data:
+            updates["light_filter"] = call.data["light_filter"]
+
+        # Determine effective trigger_mode and trigger_config for validation/regen
+        new_trigger_mode = call.data.get("trigger_mode", existing.get("trigger_mode", "template"))
+        new_trigger_config = call.data.get("trigger_config", existing.get("trigger_config", {}))
+        new_template = call.data.get("template", existing.get("template", ""))
+
+        if "trigger_mode" in call.data:
+            updates["trigger_mode"] = new_trigger_mode
+        if "trigger_config" in call.data:
+            updates["trigger_config"] = new_trigger_config
+        if "template" in call.data:
+            updates["template"] = new_template
+
+        # Validate and regenerate template when trigger mode/config changes
+        trigger_mode_changed = "trigger_mode" in call.data or "trigger_config" in call.data
+
+        if trigger_mode_changed:
+            if new_trigger_mode == "template":
+                if not new_template:
+                    _LOGGER.error(
+                        "Signal Lights: update_signal '%s' — template mode requires a template", name
+                    )
+                    return
+            else:
+                errors = validate_trigger_config(new_trigger_mode, new_trigger_config)
+                if errors:
+                    _LOGGER.error(
+                        "Signal Lights: update_signal '%s' — invalid trigger config: %s",
+                        name, "; ".join(errors),
+                    )
+                    return
+                # Regenerate template from trigger_config if not explicitly provided
+                if "template" not in call.data:
+                    try:
+                        updates["template"] = generate_template_from_trigger(
+                            new_trigger_mode, new_trigger_config
+                        )
+                    except ValueError as err:
+                        _LOGGER.error(
+                            "Signal Lights: update_signal '%s' — failed to generate template: %s",
+                            name, err,
+                        )
+                        return
+
+        if not updates:
+            _LOGGER.debug("signal_lights.update_signal: no fields to update for '%s'", name)
+            return
+
+        saved = await coord.store.update_signal(name, updates)
+        if saved:
+            await coord.async_reload_config()
+            _LOGGER.info("Signal Lights: updated signal '%s' with %s", name, list(updates.keys()))
+        else:
+            _LOGGER.warning("signal_lights.update_signal: signal '%s' disappeared before save", name)
+
+    hass.services.async_register(
+        DOMAIN, "update_signal", handle_update_signal, schema=UPDATE_SIGNAL_SCHEMA
+    )
+
     async def handle_reorder_signals(call: ServiceCall) -> None:
         """Handle signal_lights.reorder_signals."""
         coord = _resolve_coordinator(hass, call)
@@ -505,7 +619,7 @@ async def async_unregister_services(hass: HomeAssistant) -> None:
     """Unregister all Signal Lights services."""
     for service in (
         "trigger_signal", "dismiss_signal", "refresh",
-        "add_light", "remove_light", "add_signal", "remove_signal",
+        "add_light", "remove_light", "add_signal", "update_signal", "remove_signal",
         "reorder_signals", "configure_notifications",
     ):
         hass.services.async_remove(DOMAIN, service)
