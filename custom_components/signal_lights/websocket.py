@@ -112,13 +112,13 @@ def ws_subscribe_updates(hass, connection, msg):
     entry_id_filter = msg.get("entry_id")
     domain_data = hass.data.get(DOMAIN, {})
 
-    # Send initial state
-    # send_result confirms the subscription to HA's subscribeMessage() JS client.
-    # Then immediately send an event_message with the initial data snapshot,
-    # because subscribeMessage() only fires the callback on event_messages, not on the result.
+    # Send the initial snapshot as the result payload.
+    # HA's subscribeMessage() resolves its promise with this result AND fires
+    # the callback for subsequent event_messages. By including data in the result,
+    # we avoid the event_message delivery delay on busy HA instances.
+    # The JS card handles the initial data from the subscribeMessage callback parameter.
     initial_data = _build_entry_snapshots(domain_data, entry_id_filter)
-    connection.send_result(msg["id"])
-    connection.send_message(websocket_api.event_message(msg["id"], initial_data))
+    connection.send_result(msg["id"], initial_data)
 
     # Subscribe to coordinator updates
     unsubs = []

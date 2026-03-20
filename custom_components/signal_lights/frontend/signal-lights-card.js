@@ -402,16 +402,26 @@ class SignalLightsCard extends HTMLElement {
     this._subscribing = true;
 
     const entryId = this._config.config_entry_id || null;
-    const msg = { type: 'signal_lights/subscribe' };
-    if (entryId) msg.entry_id = entryId;
 
     try {
+      // First: fetch current state immediately via one-shot command (fast, no subscription delay)
+      const initial = await this._hass.callWS({
+        type: 'signal_lights/config',
+        ...(entryId ? { entry_id: entryId } : {}),
+      });
+      this._wsData = initial;
+      this._updateFromWsData();
+
+      // Then: subscribe for live updates
       const unsub = await this._hass.connection.subscribeMessage(
         (event) => {
           this._wsData = event;
           this._updateFromWsData();
         },
-        msg
+        {
+          type: 'signal_lights/subscribe',
+          ...(entryId ? { entry_id: entryId } : {}),
+        }
       );
       if (!this.isConnected) {
         unsub();
