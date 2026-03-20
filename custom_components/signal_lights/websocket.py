@@ -40,20 +40,24 @@ def _build_entry_snapshots(domain_data: dict, entry_id_filter: str | None = None
     for eid, coord in domain_data.items():
         if entry_id_filter and eid != entry_id_filter:
             continue
-        active_data = coord.data or {}
-        result.append({
-            "entry_id": eid,
-            "title": coord.entry_title,
-            "signals": coord.store.get_signals(),
-            "lights": coord.store.get_lights(),
-            "notifications": coord.store.get_notification_config(),
-            "active_signal": active_data.get("active_signal", "none"),
-            "active_color": active_data.get("active_color", "#000000"),
-            "active_signal_names": active_data.get("active_signal_names", []),
-            "queue_depth": active_data.get("queue_depth", 0),
-            "is_active": active_data.get("is_active", False),
-            "signal_errors": active_data.get("signal_errors", {}),
-        })
+        try:
+            active_data = coord.data or {}
+            result.append({
+                "entry_id": eid,
+                "title": coord.entry_title,
+                "signals": coord.store.get_signals(),
+                "lights": coord.store.get_lights(),
+                "notifications": coord.store.get_notification_config(),
+                "active_signal": active_data.get("active_signal", "none"),
+                "active_color": active_data.get("active_color", "#000000"),
+                "active_signal_names": active_data.get("active_signal_names", []),
+                "queue_depth": active_data.get("queue_depth", 0),
+                "is_active": active_data.get("is_active", False),
+                "signal_errors": active_data.get("signal_errors", {}),
+            })
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Signal Lights: error building snapshot for entry %s", eid)
+            continue
     return result
 
 
@@ -61,6 +65,7 @@ def _build_entry_snapshots(domain_data: dict, entry_id_filter: str | None = None
     vol.Required("type"): "signal_lights/config",
     vol.Optional("entry_id"): str,
 })
+@websocket_api.require_admin
 @callback
 def ws_get_config(hass, connection, msg):
     """Return full config and state for all Signal Lights entries (or a specific one).
@@ -81,6 +86,7 @@ def ws_get_config(hass, connection, msg):
     vol.Required("type"): "signal_lights/subscribe",
     vol.Optional("entry_id"): str,
 })
+@websocket_api.require_admin
 @callback
 def ws_subscribe_updates(hass, connection, msg):
     """Subscribe to Signal Lights state updates.
@@ -115,6 +121,7 @@ def ws_subscribe_updates(hass, connection, msg):
     def _unsubscribe() -> None:
         for unsub in unsubs:
             unsub()
+        unsubs.clear()
 
     for eid, coord in domain_data.items():
         if entry_id_filter and eid != entry_id_filter:
@@ -136,9 +143,9 @@ def ws_subscribe_updates(hass, connection, msg):
                     )
                 )
             except Exception:  # noqa: BLE001
-                # Connection likely closed — clean up all listeners to avoid
-                # zombie callbacks accumulating on the coordinator.
-                _unsubscribe()
+                # Connection likely closed — defer cleanup to avoid calling
+                # _unsubscribe from within listener dispatch.
+                hass.loop.call_soon(_unsubscribe)
 
         unsubs.append(coord.async_add_listener(_on_update))
 
