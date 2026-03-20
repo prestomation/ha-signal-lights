@@ -113,13 +113,13 @@ CONFIGURE_NOTIFICATIONS_SCHEMA = vol.Schema(
 )
 
 
-def _get_coordinator(hass: HomeAssistant) -> SignalLightsCoordinator:
-    """Return the active coordinator for the single entry."""
+def _get_coordinator(hass: HomeAssistant) -> SignalLightsCoordinator | None:
+    """Return the active coordinator for the single entry, or None."""
     for entry in hass.config_entries.async_entries(DOMAIN):
         coord = getattr(entry, "runtime_data", None)
         if isinstance(coord, SignalLightsCoordinator):
             return coord
-    raise RuntimeError("No active Signal Lights coordinator found")
+    return None
 
 
 async def async_register_services(hass: HomeAssistant) -> None:
@@ -128,6 +128,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_trigger_signal(call: ServiceCall) -> None:
         """Handle signal_lights.trigger_signal."""
         coord = _get_coordinator(hass)
+        if coord is None:
+            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
+            return
         name = call.data["name"]
         result = await coord.async_trigger_signal(name)
         if not result:
@@ -142,6 +145,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_dismiss_signal(call: ServiceCall) -> None:
         """Handle signal_lights.dismiss_signal."""
         coord = _get_coordinator(hass)
+        if coord is None:
+            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
+            return
         name = call.data["name"]
         result = await coord.async_dismiss_signal(name)
         if not result:
@@ -157,6 +163,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_refresh(call: ServiceCall) -> None:
         """Handle signal_lights.refresh."""
         coord = _get_coordinator(hass)
+        if coord is None:
+            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
+            return
         await coord.async_refresh_signals()
 
     hass.services.async_register(
@@ -170,6 +179,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_add_light(call: ServiceCall) -> None:
         """Handle signal_lights.add_light."""
         coord = _get_coordinator(hass)
+        if coord is None:
+            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
+            return
 
         # Enforce count limit
         current_lights = coord.store.get_lights()
@@ -192,6 +204,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_remove_light(call: ServiceCall) -> None:
         """Handle signal_lights.remove_light."""
         coord = _get_coordinator(hass)
+        if coord is None:
+            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
+            return
         entity_id = call.data["entity_id"]
         removed = await coord.store.remove_light(entity_id)
         if removed:
@@ -207,6 +222,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_add_signal(call: ServiceCall) -> None:
         """Handle signal_lights.add_signal."""
         coord = _get_coordinator(hass)
+        if coord is None:
+            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
+            return
         trigger_mode = call.data.get("trigger_mode", "template")
         trigger_config = call.data.get("trigger_config", {})
         template = call.data.get("template", "")
@@ -223,6 +241,8 @@ async def async_register_services(hass: HomeAssistant) -> None:
 
         # Restrict template mode to admin users
         if trigger_mode == "template":
+            # user_id is None for system/automation calls — these are trusted
+            # (only admins can create automations in HA)
             if call.context.user_id:
                 user = await hass.auth.async_get_user(call.context.user_id)
                 if not user or not user.is_admin:
@@ -312,6 +332,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_remove_signal(call: ServiceCall) -> None:
         """Handle signal_lights.remove_signal."""
         coord = _get_coordinator(hass)
+        if coord is None:
+            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
+            return
         name = call.data["name"]
         removed = await coord.store.remove_signal(name)
         if removed:
@@ -327,6 +350,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_reorder_signals(call: ServiceCall) -> None:
         """Handle signal_lights.reorder_signals."""
         coord = _get_coordinator(hass)
+        if coord is None:
+            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
+            return
         ordered_names = call.data["order"]
 
         # Validate that all provided names exist
@@ -351,6 +377,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_configure_notifications(call: ServiceCall) -> None:
         """Handle signal_lights.configure_notifications."""
         coord = _get_coordinator(hass)
+        if coord is None:
+            _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
+            return
         enabled = call.data["enabled"]
         targets = call.data.get("targets", [])
 

@@ -163,23 +163,28 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Push the current signal evaluation to physical lights."""
         states = self.engine.evaluate()
         for entity_id, state in states.items():
-            if state is None:
-                await self.hass.services.async_call(
-                    "light",
-                    "turn_off",
-                    {"entity_id": entity_id},
-                    blocking=False,
-                )
-            else:
-                await self.hass.services.async_call(
-                    "light",
-                    "turn_on",
-                    {
-                        "entity_id": entity_id,
-                        "rgb_color": list(state["rgb_color"]),
-                        "brightness": state["brightness"],
-                    },
-                    blocking=False,
+            try:
+                if state is None:
+                    await self.hass.services.async_call(
+                        "light",
+                        "turn_off",
+                        {"entity_id": entity_id},
+                        blocking=False,
+                    )
+                else:
+                    await self.hass.services.async_call(
+                        "light",
+                        "turn_on",
+                        {
+                            "entity_id": entity_id,
+                            "rgb_color": list(state["rgb_color"]),
+                            "brightness": state["brightness"],
+                        },
+                        blocking=False,
+                    )
+            except Exception:  # noqa: BLE001
+                _LOGGER.warning(
+                    "Signal Lights: failed to control light %s", entity_id
                 )
 
     async def _apply_notifications(self) -> None:

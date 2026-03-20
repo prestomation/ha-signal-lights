@@ -25,8 +25,11 @@ from pathlib import Path
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN, PLATFORMS, URL_BASE, CARD_VERSION
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 from .coordinator import SignalLightsCoordinator
 from .services import async_register_services, async_unregister_services
 from .store import SignalLightsStore
@@ -131,11 +134,6 @@ async def _ensure_frontend_registered(hass: HomeAssistant) -> None:
     """Register frontend resources."""
     reg = SignalLightsCardRegistration(hass)
     await reg.async_register()
-
-
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Global integration setup hook (config-flow only integration)."""
-    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
