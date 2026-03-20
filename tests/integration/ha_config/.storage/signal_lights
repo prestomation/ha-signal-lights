@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "minor_version": 1,
+  "key": "signal_lights",
+  "data": {
+    "lights": [],
+    "signals": [
+      {
+        "name": "test_alert",
+        "priority": 1,
+        "color": [255, 0, 0],
+        "trigger_type": "event",
+        "template": "{{ true }}",
+        "duration": 5,
+        "light_filter": [],
+        "sort_order": 0
+      },
+      {
+        "name": "test_condition",
+        "priority": 5,
+        "color": [0, 255, 0],
+        "trigger_type": "condition",
+        "template": "{{ false }}",
+        "duration": 0,
+        "light_filter": [],
+        "sort_order": 1
+      }
+    ]
+  }
+}

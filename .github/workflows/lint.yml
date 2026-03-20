@@ -1,0 +1,31 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pytest
+
+      - name: Compile check
+        run: |
+          find custom_components -name "*.py" -exec python -m py_compile {} +
+
+      - name: Run unit tests
+        run: python -m pytest tests/test_engine.py -v
+
+      - name: Run hassfest
+        uses: "home-assistant/actions/hassfest@master"
