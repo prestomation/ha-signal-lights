@@ -210,6 +210,8 @@ class SignalLightsStore:
         for sig in self._data["signals"]:
             if sig["name"] == name:
                 sig.update(updates)
+                # Enforce invariants (defaults, drop legacy fields) after every update
+                self._normalize_signal(sig, sig.get("sort_order", 0))
                 await self.save()
                 return True
         return False

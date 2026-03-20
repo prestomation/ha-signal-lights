@@ -155,57 +155,120 @@ CONFIGURE_NOTIFICATIONS_SCHEMA = vol.Schema(
 )
 
 
+async def _validate_and_generate_template(
+    hass: HomeAssistant,
+    trigger_mode: str,
+    trigger_config: dict,
+    template: str,
+    signal_name: str,
+) -> str | None:
+    """Validate trigger config and return resolved template, or None on error.
+
+    For template mode: checks that a template string is provided.
+    For other modes: validates trigger_config, auto-generates template if missing.
+    In all cases: validates Jinja2 syntax of the resolved template.
+    Returns the (possibly generated) template string, or None if validation fails.
+    """
+    if trigger_mode == "template":
+        if not template:
+            _LOGGER.error(
+                "Signal Lights: '%s' — template mode requires a template", signal_name
+            )
+            return None
+    else:
+        errors = validate_trigger_config(trigger_mode, trigger_config)
+        if errors:
+            _LOGGER.error(
+                "Signal Lights: '%s' invalid trigger config: %s",
+                signal_name,
+                "; ".join(errors),
+            )
+            return None
+        if not template:
+            try:
+                template = generate_template_from_trigger(trigger_mode, trigger_config)
+            except ValueError as err:
+                _LOGGER.error(
+                    "Signal Lights: '%s' failed to generate template: %s",
+                    signal_name,
+                    err,
+                )
+                return None
+
+    if template:
+        try:
+            from homeassistant.helpers.template import Template as HaTemplate  # noqa: PLC0415
+            HaTemplate(template)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error(
+                "Signal Lights: '%s' — invalid Jinja2: %s", signal_name, err
+            )
+            return None
+
+    return template
+
+
 def _get_coordinator(
     hass: HomeAssistant, entry_id: str | None = None
 ) -> SignalLightsCoordinator | None:
     """Return the active coordinator for the requested entry.
 
+    Uses hass.data[DOMAIN] for O(1) lookup instead of iterating config entries.
+
     - If entry_id is given, look up that specific entry.
     - If entry_id is None and exactly one entry exists, return it (backward compat).
-    - If entry_id is None and multiple entries exist, log an error with the available
-      entry IDs and return None.
+    - If entry_id is None and multiple entries exist, log a warning and return None.
+    - If no entries exist, return None (caller logs if needed).
     """
-    entries = hass.config_entries.async_entries(DOMAIN)
-    coords = []
-    for entry in entries:
-        coord = getattr(entry, "runtime_data", None)
-        if isinstance(coord, SignalLightsCoordinator):
-            coords.append((entry.entry_id, entry.title, coord))
+    domain_data = hass.data.get(DOMAIN, {})
+    coords = {
+        eid: c
+        for eid, c in domain_data.items()
+        if isinstance(c, SignalLightsCoordinator)
+    }
+
+    if not coords:
+        return None
 
     if entry_id is not None:
-        for eid, _title, coord in coords:
-            if eid == entry_id:
-                return coord
-        _LOGGER.warning("Signal Lights: config_entry_id '%s' not found", entry_id)
-        _LOGGER.debug(
-            "Signal Lights: available entries: %s",
-            [f"{eid} ({title})" for eid, title, _ in coords],
-        )
-        return None
+        coord = coords.get(entry_id)
+        if not coord:
+            _LOGGER.warning(
+                "Signal Lights: config_entry_id '%s' not found", entry_id
+            )
+            _LOGGER.debug("Available: %s", list(coords.keys()))
+        return coord
 
     if len(coords) == 1:
-        return coords[0][2]
-
-    if len(coords) == 0:
-        return None
+        return next(iter(coords.values()))
 
     # Multiple entries and no entry_id specified
     _LOGGER.warning("Signal Lights: multiple setups exist — specify config_entry_id")
-    _LOGGER.debug(
-        "Signal Lights: available entries: %s",
-        [f"{eid} ({title})" for eid, title, _ in coords],
-    )
+    _LOGGER.debug("Signal Lights: available entries: %s", list(coords.keys()))
     return None
 
 
 def _resolve_coordinator(
     hass: HomeAssistant, call: ServiceCall
 ) -> SignalLightsCoordinator | None:
-    """Return coordinator for the call, logging a warning when none is found."""
+    """Return coordinator for the call, logging a warning when none is found.
+
+    _get_coordinator already logs for: entry_id not found, multiple entries.
+    We only add a warning here for the zero-entries case (setup not loaded yet).
+    """
     entry_id = call.data.get("config_entry_id")
     coord = _get_coordinator(hass, entry_id)
     if coord is None:
-        _LOGGER.warning("Signal Lights: no active coordinator — ignoring service call")
+        # Only log for the zero-coordinators case — other cases already logged
+        # by _get_coordinator (not-found, multiple setups).
+        domain_data = hass.data.get(DOMAIN, {})
+        has_any = any(
+            isinstance(c, SignalLightsCoordinator) for c in domain_data.values()
+        )
+        if not has_any:
+            _LOGGER.warning(
+                "Signal Lights: no active coordinator — ignoring service call"
+            )
     return coord
 
 
@@ -213,11 +276,11 @@ def _find_light_conflict(
     hass: HomeAssistant, entity_id: str, skip_coord: SignalLightsCoordinator
 ) -> tuple[str, str] | None:
     """Return (entry_id, title) of another setup that already owns entity_id, or None."""
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        other = getattr(entry, "runtime_data", None)
+    domain_data = hass.data.get(DOMAIN, {})
+    for eid, other in domain_data.items():
         if isinstance(other, SignalLightsCoordinator) and other is not skip_coord:
             if any(light["entity_id"] == entity_id for light in other.store.get_lights()):
-                return entry.entry_id, other.entry_title
+                return eid, other.entry_title
     return None
 
 
@@ -374,47 +437,14 @@ async def async_register_services(hass: HomeAssistant) -> None:
             )
             return
 
-        # Validate trigger config: for template mode check the template string;
-        # for other modes validate the trigger_config dict.
-        if trigger_mode == "template":
-            if not template:
-                _LOGGER.error(
-                    "Signal Lights: signal '%s' uses template mode but no template was provided",
-                    name,
-                )
-                return
-        else:
-            errors = validate_trigger_config(trigger_mode, trigger_config)
-            if errors:
-                _LOGGER.error(
-                    "Signal Lights: invalid trigger config for signal '%s': %s",
-                    name,
-                    "; ".join(errors),
-                )
-                return
-
-        # Generate template from trigger mode if not raw template
-        if trigger_mode != "template" and not template:
-            try:
-                template = generate_template_from_trigger(trigger_mode, trigger_config)
-            except ValueError as err:
-                _LOGGER.error(
-                    "Signal Lights: failed to generate template for signal '%s': %s",
-                    name, err,
-                )
-                return
-
-        # Validate Jinja2 syntax
-        if template:
-            try:
-                from homeassistant.helpers.template import Template as HaTemplate
-                HaTemplate(template)
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.error(
-                    "Signal Lights: template for signal '%s' has invalid Jinja2 syntax: %s",
-                    name, err,
-                )
-                return
+        # Validate trigger config and resolve template (shared helper).
+        # Returns None on any error (already logged); returns the resolved
+        # template string on success.
+        resolved_template = await _validate_and_generate_template(
+            hass, trigger_mode, trigger_config, template, name
+        )
+        if resolved_template is None:
+            return
 
         # Warn about non-existent entities (not an error — entity might appear later)
         entity_id = trigger_config.get("entity_id", "")
@@ -432,7 +462,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
             "trigger_type": call.data["trigger_type"],
             "trigger_mode": trigger_mode,
             "trigger_config": trigger_config,
-            "template": template,
+            "template": resolved_template or "",
             "duration": call.data.get("duration", 0),
             "light_filter": call.data.get("light_filter", []),
         }
@@ -510,36 +540,49 @@ async def async_register_services(hass: HomeAssistant) -> None:
         if "template" in call.data:
             updates["template"] = new_template
 
-        # Validate and regenerate template when trigger mode/config changes
+        # Determine if template-related validation is needed.
+        # We validate when: trigger_mode/config changed, or template explicitly updated.
         trigger_mode_changed = "trigger_mode" in call.data or "trigger_config" in call.data
+        template_explicitly_updated = "template" in call.data
 
-        if trigger_mode_changed:
-            if new_trigger_mode == "template":
-                if not new_template:
+        needs_validation = trigger_mode_changed or template_explicitly_updated
+
+        # Security: restrict template mode to admin users.
+        # Check when: the effective mode is "template" (new or existing) AND we're
+        # modifying something that involves the template.
+        existing_mode = existing.get("trigger_mode", "template")
+        is_template_mode_call = (
+            new_trigger_mode == "template"
+            or (existing_mode == "template" and template_explicitly_updated)
+        )
+        if is_template_mode_call and needs_validation:
+            # user_id is None for system/automation calls — trusted
+            if call.context.user_id:
+                user = await hass.auth.async_get_user(call.context.user_id)
+                if not user or not user.is_admin:
                     _LOGGER.error(
-                        "Signal Lights: update_signal '%s' — template mode requires a template", name
+                        "Signal Lights: template trigger mode requires admin privileges"
                     )
                     return
-            else:
-                errors = validate_trigger_config(new_trigger_mode, new_trigger_config)
-                if errors:
-                    _LOGGER.error(
-                        "Signal Lights: update_signal '%s' — invalid trigger config: %s",
-                        name, "; ".join(errors),
-                    )
-                    return
-                # Regenerate template from trigger_config if not explicitly provided
-                if "template" not in call.data:
-                    try:
-                        updates["template"] = generate_template_from_trigger(
-                            new_trigger_mode, new_trigger_config
-                        )
-                    except ValueError as err:
-                        _LOGGER.error(
-                            "Signal Lights: update_signal '%s' — failed to generate template: %s",
-                            name, err,
-                        )
-                        return
+
+        if needs_validation:
+            # Validate and resolve the template using the shared helper
+            resolved_template = await _validate_and_generate_template(
+                hass, new_trigger_mode, new_trigger_config, new_template, name
+            )
+            if resolved_template is None:
+                return
+            updates["template"] = resolved_template
+        elif template_explicitly_updated and new_template:
+            # Template changed without mode/config change — validate Jinja2 only
+            try:
+                from homeassistant.helpers.template import Template as HaTemplate  # noqa: PLC0415
+                HaTemplate(new_template)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.error(
+                    "Signal Lights: update_signal '%s' — invalid Jinja2: %s", name, err
+                )
+                return
 
         if not updates:
             _LOGGER.debug("signal_lights.update_signal: no fields to update for '%s'", name)

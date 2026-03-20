@@ -150,6 +150,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     entry.runtime_data = coordinator
 
+    # Cache coordinator in hass.data for O(1) lookup in service handlers
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][entry.entry_id] = coordinator
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await async_register_services(hass)
 
@@ -160,6 +164,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     coordinator: SignalLightsCoordinator = entry.runtime_data
     await coordinator.async_shutdown()
+
+    # Remove coordinator from hass.data cache
+    hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 

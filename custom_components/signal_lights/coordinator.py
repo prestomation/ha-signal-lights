@@ -28,7 +28,6 @@ from .store import SignalLightsStore
 _LOGGER = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(seconds=30)
-NOTIFICATION_TAG = "signal_lights_active"
 NOTIFICATION_TITLE = "\U0001f6a8 Signal Lights"
 
 
@@ -55,6 +54,8 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_notified_signal: str | None = None
         self._signal_errors: dict[str, str] = {}
         self._flush_lock = asyncio.Lock()
+        # Per-entry notification tag prevents cross-entry notification collisions
+        self._notification_tag = f"signal_lights_{entry.entry_id}"
 
     async def async_setup(self) -> None:
         """Set up the engine from stored configuration and start template tracking."""
@@ -241,7 +242,7 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 {
                     "title": NOTIFICATION_TITLE,
                     "message": signal_name,
-                    "notification_id": NOTIFICATION_TAG,
+                    "notification_id": self._notification_tag,
                 },
                 blocking=False,
             )
@@ -262,7 +263,7 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 {
                     "title": NOTIFICATION_TITLE,
                     "message": signal_name,
-                    "data": {"tag": NOTIFICATION_TAG},
+                    "data": {"tag": self._notification_tag},
                 },
             )
 
@@ -272,7 +273,7 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self.hass.services.async_call(
                 "persistent_notification",
                 "dismiss",
-                {"notification_id": NOTIFICATION_TAG},
+                {"notification_id": self._notification_tag},
                 blocking=False,
             )
         except Exception:  # noqa: BLE001
@@ -290,7 +291,7 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 target,
                 {
                     "message": "clear_notification",
-                    "data": {"tag": NOTIFICATION_TAG},
+                    "data": {"tag": self._notification_tag},
                 },
             )
 
@@ -333,8 +334,9 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         expired = self.engine.cleanup_expired()
         if expired:
             _LOGGER.debug("Expired signals: %s", expired)
-            await self._apply_light_states()
-            await self._apply_notifications()
+            async with self._flush_lock:
+                await self._apply_light_states()
+                await self._apply_notifications()
         return self._build_data()
 
     async def async_reload_config(self) -> None:

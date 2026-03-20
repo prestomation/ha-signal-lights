@@ -94,7 +94,6 @@ class SignalLightsCardEditor extends HTMLElement {
       }
     }
     const entries = Array.from(seen.entries()).map(([entryId, label]) => ({ eid: entryId, label }));
-    console.log('[SignalLights] _detectEntries found:', entries.length, entries.map(e => e.eid));
     return entries;
   }
 
@@ -204,7 +203,9 @@ class SignalLightsCard extends HTMLElement {
     const hash = this._dataHash();
     if (hash !== this._lastDataHash) {
       this._lastDataHash = hash;
-      if (!this._showAddSignal && !this._showAddLight) {
+      // Don't re-render while a form is open — avoids wiping user input mid-edit.
+      // The next render after the form closes will use the fresh hash.
+      if (!this._showAddSignal && !this._showAddLight && !this._editingSignal) {
         this._render();
       }
     }
@@ -224,17 +225,28 @@ class SignalLightsCard extends HTMLElement {
     return id;
   }
 
+  /** Cache signal_lights entity IDs to avoid scanning all states on every update. */
+  _getRelevantEntityIds() {
+    const stateCount = Object.keys(this._hass.states).length;
+    if (this._relevantEids && this._relevantEidsAge === stateCount) {
+      return this._relevantEids;
+    }
+    this._relevantEids = Object.keys(this._hass.states).filter(eid =>
+      (eid.startsWith('sensor.') && eid.includes('signal_lights')) ||
+      (eid.startsWith('binary_sensor.') && eid.includes('signal_lights'))
+    );
+    this._relevantEidsAge = stateCount;
+    return this._relevantEids;
+  }
+
   _dataHash() {
     if (!this._hass) return '';
-    // Find any signal_lights sensor to get coordinator data
     const states = this._hass.states;
     const parts = [];
-    for (const eid of Object.keys(states)) {
-      if (eid.startsWith('sensor.signal_lights_') || eid.startsWith('binary_sensor.signal_lights_')) {
-        parts.push(eid + '=' + states[eid].state);
-        const attrs = states[eid].attributes;
-        if (attrs.active_signals) parts.push(JSON.stringify(attrs.active_signals));
-      }
+    for (const eid of this._getRelevantEntityIds()) {
+      parts.push(eid + '=' + states[eid].state);
+      const attrs = states[eid].attributes;
+      if (attrs.active_signals) parts.push(JSON.stringify(attrs.active_signals));
     }
     return parts.join('|');
   }
@@ -598,7 +610,11 @@ class SignalLightsCard extends HTMLElement {
   _renderEditSignalForm(container, signal) {
     const mode = this._editSignalMode;
     const cfg = signal.trigger_config || {};
-    const color = signal.color || [255, 0, 0];
+
+    // Use preserved values from _editName/_editColor when re-rendering after mode change
+    const editName = signal._editName !== undefined ? signal._editName : signal.name;
+    const editColor = signal._editColor || signal.color || [255, 0, 0];
+    const color = editColor;
     const hexColor = _rgbToHex(color);
 
     let triggerFields = '';
@@ -658,7 +674,7 @@ class SignalLightsCard extends HTMLElement {
       <div class="edit-form-inner">
         <div class="form-row">
           <label>Signal name</label>
-          <input type="text" id="sl-edit-sig-name" value="${_esc(signal.name)}" />
+          <input type="text" id="sl-edit-sig-name" value="${_esc(editName)}" />
         </div>
         <div class="form-row">
           <label>Color</label>
@@ -714,13 +730,24 @@ class SignalLightsCard extends HTMLElement {
       entityContainer.appendChild(entityPicker);
     }
 
-    // Trigger mode change — re-render form with new mode
+    // Trigger mode change — re-render form with new mode, preserving user edits
     container.querySelector('#sl-edit-sig-trigger-mode').addEventListener('change', (e) => {
       this._editSignalMode = e.target.value;
       // Preserve current field values before re-rendering
       const updatedSignal = { ...signal };
       const nameEl = container.querySelector('#sl-edit-sig-name');
       if (nameEl) updatedSignal._editName = nameEl.value;
+      // Preserve color RGB values
+      const rEl = container.querySelector('#sl-edit-sig-color-r');
+      const gEl = container.querySelector('#sl-edit-sig-color-g');
+      const bEl = container.querySelector('#sl-edit-sig-color-b');
+      if (rEl && gEl && bEl) {
+        updatedSignal._editColor = [
+          parseInt(rEl.value) || 0,
+          parseInt(gEl.value) || 0,
+          parseInt(bEl.value) || 0,
+        ];
+      }
       this._renderEditSignalForm(container, updatedSignal);
     });
 
@@ -1185,75 +1212,25 @@ class SignalLightsCard extends HTMLElement {
   async _fetchConfig() {
     if (!this._hass) return;
 
-    // Use the WebSocket API to read the storage file
-    try {
-      // Try to read coordinator data via a refresh + sensor attributes
-      // The simplest approach: call refresh service, then read sensor state
-      await this._callService('signal_lights', 'refresh', { ...this._entryIdData() });
+    // The coordinator already pushes data via sensor attributes after every mutating
+    // service call — no need to call refresh here. Just wait briefly for HA to propagate
+    // the updated state, then read from hass.states directly.
+    await new Promise(r => setTimeout(r, 200));
 
-      // Wait a tick for state to update
-      await new Promise(r => setTimeout(r, 200));
-
-      // Now try to read from the HA REST API for the storage
-      // Since we can't easily access .storage from a card,
-      // we'll read the coordinator data from sensor attributes.
-      // The coordinator pushes data to sensors via async_set_updated_data.
-
-      // Find the active signal sensor and check for our enriched attributes
-      if (this._hass.states) {
-        for (const eid of Object.keys(this._hass.states)) {
-          if (eid.includes('signal_lights_active_signal')) {
-            const entity = this._hass.states[eid];
-            // The coordinator now includes signals, lights, notifications in data
-            // but HA sensors only expose what's in extra_state_attributes.
-            // We need to add these to the sensor's attributes.
-            break;
-          }
-        }
+    const activeEntity = this._getCoordData();
+    if (activeEntity && activeEntity.attributes) {
+      if (activeEntity.attributes.signals) {
+        this._signalsCache = activeEntity.attributes.signals;
       }
-
-      // Fallback: use WS API to get config entry data
-      // hass.callWS is available in Lovelace cards
-      if (this._hass.callWS) {
-        try {
-          const entries = await this._hass.callWS({
-            type: 'config_entries/get',
-            domain: 'signal_lights',
-          });
-          if (entries && entries.length > 0) {
-            // Try to get the stored data via the signal_lights domain data
-            // This requires a custom WS handler — let's use a simpler approach
-          }
-        } catch (e) {
-          // Older HA versions may not support this
-        }
+      if (activeEntity.attributes.lights) {
+        this._lightsCache = activeEntity.attributes.lights;
       }
-
-      // Simplest reliable approach: read the sensor attributes
-      // The active_signal sensor has active_signals in attributes
-      // We'll enhance the sensor to expose full config data
-      // For now, rebuild from what the card can see
-
-      // Actually — the coordinator builds data with signals, lights, notifications
-      // We just need the sensor to expose these. Let's check the sensor entity.
-      const activeEntity = this._getCoordData();
-      if (activeEntity && activeEntity.attributes) {
-        // Check if our enriched data is in attributes
-        if (activeEntity.attributes.signals) {
-          this._signalsCache = activeEntity.attributes.signals;
-        }
-        if (activeEntity.attributes.lights) {
-          this._lightsCache = activeEntity.attributes.lights;
-        }
-        if (activeEntity.attributes.notifications) {
-          this._notificationsCache = activeEntity.attributes.notifications;
-        }
+      if (activeEntity.attributes.notifications) {
+        this._notificationsCache = activeEntity.attributes.notifications;
       }
-
-      this._render();
-    } catch (err) {
-      console.error('Signal Lights: failed to fetch config:', err);
     }
+
+    this._render();
   }
 
   /* ── Styles ────────────────────────────────────────────────────────── */
