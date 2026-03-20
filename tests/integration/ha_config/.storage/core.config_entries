@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "minor_version": 1,
+  "key": "core.config_entries",
+  "data": {
+    "entries": [
+      {
+        "entry_id": "signal_lights_test_entry",
+        "version": 1,
+        "minor_version": 1,
+        "domain": "signal_lights",
+        "title": "Signal Lights",
+        "data": {
+          "name": "Signal Lights"
+        },
+        "options": {},
+        "pref_disable_new_entities": false,
+        "pref_disable_polling": false,
+        "source": "user",
+        "unique_id": "signal_lights_instance",
+        "disabled_by": null
+      }
+    ]
+  }
+}

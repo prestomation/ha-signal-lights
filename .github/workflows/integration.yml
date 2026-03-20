@@ -1,0 +1,56 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: pip install pytest pytest-timeout requests
+
+      - name: Start Home Assistant
+        working-directory: tests/integration
+        run: docker compose up -d
+
+      - name: Wait for Home Assistant to start
+        run: |
+          echo "Waiting for Home Assistant..."
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8123/api/ 2>/dev/null || true)
+            if [ "$code" = "200" ] || [ "$code" = "401" ]; then
+              echo "Home Assistant is responding (HTTP $code, attempt $i)"
+              exit 0
+            fi
+            echo "Attempt $i/60 - HTTP $code - waiting..."
+            sleep 2
+          done
+          echo "Home Assistant failed to start within 120s"
+          docker compose -f tests/integration/docker-compose.yml logs
+          exit 1
+
+      - name: Run integration tests
+        working-directory: tests/integration
+        run: python -m pytest . -v --tb=short --override-ini="asyncio_mode=auto"
+
+      - name: Dump Home Assistant logs on failure
+        if: failure()
+        working-directory: tests/integration
+        run: docker compose logs homeassistant
+
+      - name: Cleanup
+        if: always()
+        working-directory: tests/integration
+        run: docker compose down -v

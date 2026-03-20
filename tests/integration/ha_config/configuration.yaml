@@ -1,0 +1,16 @@
+homeassistant:
+  name: Test Home
+  unit_system: imperial
+  time_zone: America/New_York
+  latitude: 40.7128
+  longitude: -74.0060
+  elevation: 10
+
+# Enable the REST API
+api:
+
+# Minimal logging
+logger:
+  default: info
+  logs:
+    custom_components.signal_lights: debug

@@ -1,0 +1,11 @@
+[project]
+name = "ha-signal-lights"
+version = "1.0.0"
+requires-python = ">=3.12"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "requests>=2.31"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,31 @@
+trigger_signal:
+  name: Trigger Signal
+  description: >
+    Manually trigger an event-type signal by name. The signal will activate
+    for its configured duration, then expire automatically.
+  fields:
+    name:
+      name: Signal Name
+      description: The name of the signal to trigger.
+      required: true
+      selector:
+        text:
+
+dismiss_signal:
+  name: Dismiss Signal
+  description: >
+    Manually dismiss an active signal by name. The signal will be deactivated
+    immediately and the next highest-priority signal (if any) will take over.
+  fields:
+    name:
+      name: Signal Name
+      description: The name of the signal to dismiss.
+      required: true
+      selector:
+        text:
+
+refresh:
+  name: Refresh
+  description: >
+    Force re-evaluation of all signals and update light states immediately.
+    Useful after changing signal configuration.

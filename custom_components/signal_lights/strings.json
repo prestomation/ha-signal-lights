@@ -1,0 +1,24 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Signal Lights",
+        "description": "Signal Lights manages a priority queue of colored light notifications across your registered lights.",
+        "data": {
+          "name": "Instance name"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Signal Lights is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Signal Lights Configuration",
+        "description": "Lights: {current_lights}\n\nSignals: {current_signals}\n\nUse the signal_lights.trigger_signal and signal_lights.dismiss_signal services to control signals."
+      }
+    }
+  }
+}
