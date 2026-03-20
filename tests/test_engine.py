@@ -9,13 +9,25 @@ from unittest.mock import patch
 
 import pytest
 
-# Add the custom_components path so we can import the engine module directly
+# Import engine module directly (no HA dependencies) to avoid __init__.py
+# pulling in HA-specific imports like StaticPathConfig
 import sys
 import os
+import importlib.util
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "custom_components"))
+_engine_path = os.path.join(
+    os.path.dirname(__file__), "..", "custom_components", "signal_lights", "engine.py"
+)
+_spec = importlib.util.spec_from_file_location("signal_lights_engine", _engine_path)
+_engine_mod = importlib.util.module_from_spec(_spec)
+sys.modules["signal_lights_engine"] = _engine_mod  # register before exec for dataclass compat
+_spec.loader.exec_module(_engine_mod)
 
-from signal_lights.engine import Signal, LightConfig, ActiveSignal, SignalEngine
+Signal = _engine_mod.Signal
+LightConfig = _engine_mod.LightConfig
+ActiveSignal = _engine_mod.ActiveSignal
+SignalEngine = _engine_mod.SignalEngine
+generate_template_from_trigger = _engine_mod.generate_template_from_trigger
 
 
 # ---------------------------------------------------------------------------
@@ -41,11 +53,10 @@ def sample_lights():
 
 @pytest.fixture
 def sample_signals():
-    """Return a list of sample signals with varying priorities."""
+    """Return a list of sample signals with varying sort_orders."""
     return [
         Signal(
             name="critical_alert",
-            priority=1,
             color=(255, 0, 0),
             trigger_type="event",
             template="{{ true }}",
@@ -54,7 +65,6 @@ def sample_signals():
         ),
         Signal(
             name="door_open",
-            priority=2,
             color=(255, 165, 0),
             trigger_type="condition",
             template="{{ is_state('binary_sensor.door', 'on') }}",
@@ -62,58 +72,56 @@ def sample_signals():
         ),
         Signal(
             name="low_battery",
-            priority=5,
             color=(255, 255, 0),
             trigger_type="condition",
             template="{{ states('sensor.battery') | int < 20 }}",
-            sort_order=2,
+            sort_order=4,
         ),
         Signal(
-            name="tess_home",
-            priority=3,
+            name="person_home",
             color=(255, 0, 255),
             trigger_type="event",
-            template="{{ is_state('person.tess', 'home') }}",
+            template="{{ is_state('person.a', 'home') }}",
             duration=60,
-            sort_order=3,
+            sort_order=2,
         ),
     ]
 
 
 # ---------------------------------------------------------------------------
-# Signal priority ordering
+# Signal priority ordering (by sort_order)
 # ---------------------------------------------------------------------------
 
 
 class TestSignalPriority:
-    """Test signal priority ordering."""
+    """Test signal priority ordering by sort_order."""
 
-    def test_highest_priority_wins(self, engine, sample_lights, sample_signals):
-        """Lower priority number should win over higher."""
+    def test_lowest_sort_order_wins(self, engine, sample_lights, sample_signals):
+        """Lower sort_order should win over higher."""
         engine.set_lights(sample_lights)
         engine.set_signals(sample_signals)
 
-        # Activate low-priority signal first
+        # Activate low-priority signal first (sort_order=4)
         engine.activate_signal("low_battery")
         winner = engine.get_global_winner()
         assert winner.name == "low_battery"
 
-        # Activate higher-priority signal
+        # Activate higher-priority signal (sort_order=1)
         engine.activate_signal("door_open")
         winner = engine.get_global_winner()
         assert winner.name == "door_open"
 
-        # Activate highest-priority signal
+        # Activate highest-priority signal (sort_order=0)
         engine.activate_signal("critical_alert")
         winner = engine.get_global_winner()
         assert winner.name == "critical_alert"
 
-    def test_same_priority_uses_sort_order(self, engine, sample_lights):
-        """When priority is tied, sort_order breaks the tie."""
+    def test_sort_order_determines_winner(self, engine, sample_lights):
+        """Sort_order alone determines which signal wins (priority field ignored)."""
         signals = [
-            Signal(name="alpha", priority=1, color=(255, 0, 0),
+            Signal(name="alpha", color=(255, 0, 0),
                    trigger_type="condition", template="", sort_order=2),
-            Signal(name="beta", priority=1, color=(0, 255, 0),
+            Signal(name="beta", color=(0, 255, 0),
                    trigger_type="condition", template="", sort_order=1),
         ]
         engine.set_lights(sample_lights)
@@ -130,9 +138,9 @@ class TestSignalPriority:
         engine.set_lights(sample_lights)
         engine.set_signals(sample_signals)
 
-        engine.activate_signal("critical_alert")
-        engine.activate_signal("door_open")
-        engine.activate_signal("low_battery")
+        engine.activate_signal("critical_alert")  # sort_order=0
+        engine.activate_signal("door_open")       # sort_order=1
+        engine.activate_signal("low_battery")     # sort_order=4
 
         assert engine.get_global_winner().name == "critical_alert"
 
@@ -155,7 +163,6 @@ class TestEventSignalExpiry:
         """Event signals should expire after their duration."""
         signal = Signal(
             name="flash",
-            priority=1,
             color=(255, 0, 0),
             trigger_type="event",
             template="",
@@ -178,7 +185,6 @@ class TestEventSignalExpiry:
         """Expired event signals should be removed on cleanup."""
         signal = Signal(
             name="flash",
-            priority=1,
             color=(255, 0, 0),
             trigger_type="event",
             template="",
@@ -203,7 +209,6 @@ class TestEventSignalExpiry:
         """Condition signals should never auto-expire."""
         signal = Signal(
             name="persistent",
-            priority=1,
             color=(0, 255, 0),
             trigger_type="condition",
             template="",
@@ -219,11 +224,11 @@ class TestEventSignalExpiry:
         assert not active[0].is_expired
 
     def test_expiry_promotes_next_signal(self, engine, sample_lights):
-        """When an event signal expires, the next priority takes over."""
+        """When an event signal expires, the next sort_order takes over."""
         signals = [
-            Signal(name="urgent", priority=1, color=(255, 0, 0),
+            Signal(name="urgent", color=(255, 0, 0),
                    trigger_type="event", template="", duration=5, sort_order=0),
-            Signal(name="background", priority=5, color=(0, 0, 255),
+            Signal(name="background", color=(0, 0, 255),
                    trigger_type="condition", template="", sort_order=1),
         ]
         engine.set_lights(sample_lights)
@@ -235,8 +240,7 @@ class TestEventSignalExpiry:
 
         assert engine.get_global_winner().name == "urgent"
 
-        # Expire the urgent signal by setting expiry in the past
-        # Find the urgent active signal
+        # Expire the urgent signal
         for active in engine._active:
             if active.signal.name == "urgent":
                 active.expires_at = time.monotonic() - 1
@@ -258,7 +262,6 @@ class TestConditionSignals:
         """Condition signals activate and deactivate cleanly."""
         signal = Signal(
             name="door_open",
-            priority=2,
             color=(255, 165, 0),
             trigger_type="condition",
             template="",
@@ -285,7 +288,6 @@ class TestConditionSignals:
         """Activating an already-active signal should not create duplicates."""
         signal = Signal(
             name="alert",
-            priority=1,
             color=(255, 0, 0),
             trigger_type="condition",
             template="",
@@ -315,7 +317,6 @@ class TestPerLightFiltering:
         """A signal with no light_filter applies to all lights."""
         signal = Signal(
             name="global_alert",
-            priority=1,
             color=(255, 0, 0),
             trigger_type="condition",
             template="",
@@ -335,7 +336,6 @@ class TestPerLightFiltering:
         signals = [
             Signal(
                 name="desk_only",
-                priority=1,
                 color=(0, 255, 0),
                 trigger_type="condition",
                 template="",
@@ -358,7 +358,6 @@ class TestPerLightFiltering:
         signals = [
             Signal(
                 name="desk_alert",
-                priority=1,
                 color=(255, 0, 0),
                 trigger_type="condition",
                 template="",
@@ -367,7 +366,6 @@ class TestPerLightFiltering:
             ),
             Signal(
                 name="bedroom_alert",
-                priority=1,
                 color=(0, 0, 255),
                 trigger_type="condition",
                 template="",
@@ -390,7 +388,6 @@ class TestPerLightFiltering:
         signals = [
             Signal(
                 name="desk_specific",
-                priority=1,
                 color=(255, 0, 0),
                 trigger_type="condition",
                 template="",
@@ -399,7 +396,6 @@ class TestPerLightFiltering:
             ),
             Signal(
                 name="global_background",
-                priority=5,
                 color=(0, 255, 0),
                 trigger_type="condition",
                 template="",
@@ -440,7 +436,6 @@ class TestEmptyQueue:
         """After all signals are deactivated, lights should turn off."""
         signal = Signal(
             name="temp",
-            priority=1,
             color=(255, 0, 0),
             trigger_type="condition",
             template="",
@@ -482,7 +477,6 @@ class TestBrightness:
         ]
         signal = Signal(
             name="alert",
-            priority=1,
             color=(255, 0, 0),
             trigger_type="condition",
             template="",
@@ -548,7 +542,7 @@ class TestSignalApplies:
     def test_empty_filter_applies_to_all(self):
         """Empty light_filter means signal applies to all lights."""
         signal = Signal(
-            name="test", priority=1, color=(0, 0, 0),
+            name="test", color=(0, 0, 0),
             trigger_type="condition", template="",
         )
         assert signal.applies_to_light("light.any")
@@ -556,9 +550,129 @@ class TestSignalApplies:
     def test_filter_includes_light(self):
         """Signal with filter applies to lights in the filter."""
         signal = Signal(
-            name="test", priority=1, color=(0, 0, 0),
+            name="test", color=(0, 0, 0),
             trigger_type="condition", template="",
             light_filter=["light.specific"],
         )
         assert signal.applies_to_light("light.specific")
         assert not signal.applies_to_light("light.other")
+
+
+# ---------------------------------------------------------------------------
+# Trigger mode template generation
+# ---------------------------------------------------------------------------
+
+
+class TestTriggerModes:
+    """Test generate_template_from_trigger for all trigger modes."""
+
+    def test_entity_equals_generates_template(self):
+        """entity_equals mode generates is_state template."""
+        template = generate_template_from_trigger(
+            "entity_equals",
+            {"entity_id": "binary_sensor.back_door", "state": "on"},
+        )
+        assert template == "{{ is_state('binary_sensor.back_door', 'on') }}"
+
+    def test_entity_on_generates_template(self):
+        """entity_on mode generates is_state(..., 'on') template."""
+        template = generate_template_from_trigger(
+            "entity_on",
+            {"entity_id": "switch.porch_light"},
+        )
+        assert template == "{{ is_state('switch.porch_light', 'on') }}"
+
+    def test_numeric_threshold_above_generates_template(self):
+        """numeric_threshold above generates > comparison template."""
+        template = generate_template_from_trigger(
+            "numeric_threshold",
+            {"entity_id": "sensor.temperature", "threshold": 30, "direction": "above"},
+        )
+        assert template == "{{ states('sensor.temperature') | float(0) > 30 }}"
+
+    def test_numeric_threshold_below_generates_template(self):
+        """numeric_threshold below generates < comparison template."""
+        template = generate_template_from_trigger(
+            "numeric_threshold",
+            {"entity_id": "sensor.battery_level", "threshold": 20, "direction": "below"},
+        )
+        assert template == "{{ states('sensor.battery_level') | float(0) < 20 }}"
+
+    def test_template_mode_passes_through(self):
+        """template mode returns the raw template string."""
+        raw = "{{ states('sensor.x') | int > 5 }}"
+        template = generate_template_from_trigger(
+            "template",
+            {"template": raw},
+        )
+        assert template == raw
+
+    def test_unknown_mode_returns_empty(self):
+        """Unknown trigger mode returns empty string."""
+        template = generate_template_from_trigger("unknown_mode", {})
+        assert template == ""
+
+    def test_entity_equals_missing_fields_uses_empty_strings(self):
+        """entity_equals with missing fields uses empty strings."""
+        template = generate_template_from_trigger("entity_equals", {})
+        assert template == "{{ is_state('', '') }}"
+
+
+# ---------------------------------------------------------------------------
+# Signal with trigger_mode and trigger_config
+# ---------------------------------------------------------------------------
+
+
+class TestSignalTriggerMode:
+    """Test Signal dataclass with trigger_mode and trigger_config."""
+
+    def test_signal_stores_trigger_mode(self):
+        """Signal should store trigger_mode."""
+        signal = Signal(
+            name="test",
+            color=(255, 0, 0),
+            trigger_type="condition",
+            template="{{ is_state('sensor.x', 'on') }}",
+            trigger_mode="entity_equals",
+            trigger_config={"entity_id": "sensor.x", "state": "on"},
+        )
+        assert signal.trigger_mode == "entity_equals"
+        assert signal.trigger_config == {"entity_id": "sensor.x", "state": "on"}
+
+    def test_signal_defaults_to_template_mode(self):
+        """Signal should default to template trigger mode."""
+        signal = Signal(
+            name="test",
+            color=(255, 0, 0),
+            trigger_type="condition",
+            template="{{ true }}",
+        )
+        assert signal.trigger_mode == "template"
+        assert signal.trigger_config == {}
+
+
+# ---------------------------------------------------------------------------
+# Sort order based ordering
+# ---------------------------------------------------------------------------
+
+
+class TestSortOrderOnly:
+    """Test that ordering is purely by sort_order, not priority field."""
+
+    def test_priority_field_ignored_for_ordering(self, engine, sample_lights):
+        """Even if priority field differs, sort_order determines winner."""
+        signals = [
+            Signal(name="high_prio_but_low_order", priority=100, color=(255, 0, 0),
+                   trigger_type="condition", template="", sort_order=0),
+            Signal(name="low_prio_but_high_order", priority=1, color=(0, 255, 0),
+                   trigger_type="condition", template="", sort_order=1),
+        ]
+        engine.set_lights(sample_lights)
+        engine.set_signals(signals)
+
+        engine.activate_signal("high_prio_but_low_order")
+        engine.activate_signal("low_prio_but_high_order")
+
+        # sort_order=0 wins regardless of priority field
+        winner = engine.get_global_winner()
+        assert winner.name == "high_prio_but_low_order"

@@ -11,14 +11,15 @@ Shape:
         ],
         "signals": [
             {
-                "name": "Tess arrives home",
-                "priority": 1,
-                "color": [255, 0, 255],
-                "trigger_type": "event",
-                "template": "{{ is_state('person.tess', 'home') }}",
-                "duration": 60,
-                "light_filter": [],
-                "sort_order": 0
+                "name": "Back door open",
+                "sort_order": 0,
+                "color": [255, 0, 0],
+                "trigger_type": "condition",
+                "trigger_mode": "entity_equals",
+                "trigger_config": {"entity_id": "binary_sensor.back_door", "state": "on"},
+                "template": "{{ is_state('binary_sensor.back_door', 'on') }}",
+                "duration": 0,
+                "light_filter": []
             },
             ...
         ]
@@ -63,6 +64,15 @@ class SignalLightsStore:
         # Ensure expected keys
         self._data.setdefault("lights", [])
         self._data.setdefault("signals", [])
+        self._data.setdefault("notifications", {"enabled": False, "targets": []})
+        # Migrate: ensure all signals have sort_order, trigger_mode, trigger_config
+        for i, sig in enumerate(self._data["signals"]):
+            if "sort_order" not in sig:
+                sig["sort_order"] = i
+            if "trigger_mode" not in sig:
+                sig["trigger_mode"] = "template"
+            if "trigger_config" not in sig:
+                sig["trigger_config"] = {}
 
     async def save(self) -> None:
         """Persist configuration to disk."""
@@ -108,8 +118,8 @@ class SignalLightsStore:
     # -----------------------------------------------------------------------
 
     def get_signals(self) -> list[dict[str, Any]]:
-        """Return the list of signal definitions."""
-        return list(self._data["signals"])
+        """Return the list of signal definitions, sorted by sort_order."""
+        return sorted(self._data["signals"], key=lambda s: s.get("sort_order", 0))
 
     async def set_signals(self, signals: list[dict[str, Any]]) -> None:
         """Replace the entire signals list and persist."""
@@ -117,14 +127,16 @@ class SignalLightsStore:
         await self.save()
 
     async def add_signal(self, signal: dict[str, Any]) -> None:
-        """Add a signal definition."""
-        # Auto-assign sort_order if not set
-        if "sort_order" not in signal:
-            max_order = max(
-                (s.get("sort_order", 0) for s in self._data["signals"]),
-                default=-1,
-            )
-            signal["sort_order"] = max_order + 1
+        """Add a signal definition. Auto-assigns sort_order (appended to end)."""
+        # Auto-assign sort_order — always append to end
+        max_order = max(
+            (s.get("sort_order", 0) for s in self._data["signals"]),
+            default=-1,
+        )
+        signal["sort_order"] = max_order + 1
+        # Ensure trigger_mode and trigger_config defaults
+        signal.setdefault("trigger_mode", "template")
+        signal.setdefault("trigger_config", {})
         self._data["signals"].append(signal)
         await self.save()
 
@@ -135,9 +147,30 @@ class SignalLightsStore:
             s for s in self._data["signals"] if s["name"] != name
         ]
         if len(self._data["signals"]) < before:
+            # Re-index sort_order after removal
+            self._reindex_sort_order()
             await self.save()
             return True
         return False
+
+    async def reorder_signals(self, ordered_names: list[str]) -> None:
+        """Reorder signals by a list of signal names. Re-indexes sort_order."""
+        name_to_signal = {s["name"]: s for s in self._data["signals"]}
+        reordered = []
+        for name in ordered_names:
+            if name in name_to_signal:
+                reordered.append(name_to_signal.pop(name))
+        # Append any signals not in the ordered list (shouldn't happen, but safe)
+        for sig in name_to_signal.values():
+            reordered.append(sig)
+        self._data["signals"] = reordered
+        self._reindex_sort_order()
+        await self.save()
+
+    def _reindex_sort_order(self) -> None:
+        """Re-index sort_order values sequentially."""
+        for i, sig in enumerate(self._data["signals"]):
+            sig["sort_order"] = i
 
     def get_signal_by_name(self, name: str) -> dict[str, Any] | None:
         """Find a signal by name."""
@@ -145,3 +178,18 @@ class SignalLightsStore:
             if signal["name"] == name:
                 return signal
         return None
+
+    # -----------------------------------------------------------------------
+    # Notifications
+    # -----------------------------------------------------------------------
+
+    def get_notification_config(self) -> dict[str, Any]:
+        """Return the notification configuration."""
+        return dict(self._data.get("notifications", {"enabled": False, "targets": []}))
+
+    async def set_notification_config(
+        self, enabled: bool, targets: list[str]
+    ) -> None:
+        """Update notification configuration and persist."""
+        self._data["notifications"] = {"enabled": enabled, "targets": targets}
+        await self.save()

@@ -3,22 +3,114 @@
     "step": {
       "user": {
         "title": "Set up Signal Lights",
-        "description": "Signal Lights manages a priority queue of colored light notifications across your registered lights.",
+        "description": "Create a Signal Lights instance to manage notification colors on your lights.",
         "data": {
-          "name": "Instance name"
+          "name": "Name"
         }
       }
-    },
-    "abort": {
-      "already_configured": "Signal Lights is already configured."
     }
   },
   "options": {
     "step": {
       "init": {
         "title": "Signal Lights Configuration",
-        "description": "Lights: {current_lights}\n\nSignals: {current_signals}\n\nUse the signal_lights.trigger_signal and signal_lights.dismiss_signal services to control signals."
+        "description": "**Lights ({light_count}):** {light_list}\n\n**Signals ({signal_count}):** {signal_list}",
+        "data": {
+          "action": "What would you like to do?"
+        }
+      },
+      "add_light": {
+        "title": "Add Light",
+        "description": "Choose a light entity to use as a signal output.",
+        "data": {
+          "entity_id": "Light",
+          "brightness": "Brightness"
+        }
+      },
+      "remove_light": {
+        "title": "Remove Light",
+        "description": "Select a light to remove from signal outputs.",
+        "data": {
+          "entity_id": "Light"
+        }
+      },
+      "add_signal": {
+        "title": "Add Signal",
+        "description": "Define a new signal. Signals are prioritized by their position in the list.",
+        "data": {
+          "name": "Signal name",
+          "color": "Color",
+          "trigger_type": "Trigger type",
+          "trigger_mode": "Trigger mode"
+        }
+      },
+      "trigger_entity_equals": {
+        "title": "Signal: {signal_name} — Entity equals state",
+        "description": "Pick an entity and the state value to match.",
+        "data": {
+          "entity_id": "Entity",
+          "state_value": "State value (e.g., home, on, open)",
+          "duration": "Duration (seconds)",
+          "light_filter": "Only show on these lights (leave empty for all)"
+        }
+      },
+      "trigger_entity_on": {
+        "title": "Signal: {signal_name} — Entity is on",
+        "description": "Pick an entity that should be 'on' to activate this signal.",
+        "data": {
+          "entity_id": "Entity",
+          "duration": "Duration (seconds)",
+          "light_filter": "Only show on these lights (leave empty for all)"
+        }
+      },
+      "trigger_numeric": {
+        "title": "Signal: {signal_name} — Numeric threshold",
+        "description": "Pick a sensor entity and a numeric threshold.",
+        "data": {
+          "entity_id": "Sensor entity",
+          "threshold": "Threshold value",
+          "direction": "Direction",
+          "duration": "Duration (seconds)",
+          "light_filter": "Only show on these lights (leave empty for all)"
+        }
+      },
+      "trigger_template": {
+        "title": "Signal: {signal_name}",
+        "description": "Set the template for this {trigger_type} signal. The template should evaluate to true/false.",
+        "data": {
+          "template": "Template",
+          "duration": "Duration (seconds)",
+          "light_filter": "Only show on these lights (leave empty for all)"
+        }
+      },
+      "remove_signal": {
+        "title": "Remove Signal",
+        "description": "Select a signal to remove.",
+        "data": {
+          "name": "Signal"
+        }
+      },
+      "reorder_signals": {
+        "title": "Reorder Signals",
+        "description": "Select a signal and its new position. Position 1 = highest priority.",
+        "data": {
+          "signal": "Signal to move",
+          "position": "New position"
+        }
+      },
+      "configure_notifications": {
+        "title": "Configure Notifications",
+        "description": "Send notifications when signals are active. Currently {current_status}.",
+        "data": {
+          "enabled": "Enable notifications",
+          "targets": "Notify targets (comma-separated, e.g., notify.mobile_app_phone)"
+        }
       }
+    },
+    "abort": {
+      "no_lights": "No lights configured yet. Add a light first.",
+      "no_signals": "No signals configured yet. Add a signal first.",
+      "not_enough_signals": "Need at least 2 signals to reorder."
     }
   }
 }

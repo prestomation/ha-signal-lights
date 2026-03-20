@@ -9,7 +9,7 @@ A Home Assistant custom integration that manages a **priority queue of colored l
 ## How It Works
 
 1. **Register lights** — Add existing HA light entities as signal outputs, each with a configurable brightness.
-2. **Define signals** — Create signals with a name, priority, color, and trigger:
+2. **Define signals** — Create signals with a name, color, and trigger:
    - **Event signals**: Fire when a template becomes truthy, show for a set duration, then expire.
    - **Condition signals**: Stay active as long as a template evaluates to true.
 3. **Engine evaluates** — The highest-priority active signal wins and its color is pushed to your lights. When it expires or is dismissed, the next one takes over. When nothing is active, lights turn off.
@@ -31,37 +31,82 @@ A Home Assistant custom integration that manages a **priority queue of colored l
 
 ## Configuration
 
-After installing, configure lights and signals via the `.storage/signal_lights` file or programmatically via service calls.
+### Lovelace Card (Recommended)
+
+After installation, the custom **Signal Lights Card** is automatically registered. Add it to your dashboard:
+
+1. Edit your dashboard → Add Card → Search "Signal Lights"
+2. The card provides full configuration UI:
+   - **Lights section**: Add/remove lights with brightness sliders
+   - **Signals section**: Add/remove signals, drag-to-reorder priorities, trigger/dismiss
+   - **Notifications section**: Enable/disable persistent notifications and mobile app targets
+
+### Options Flow
+
+You can also configure via Settings → Devices & Services → Signal Lights → Configure:
+
+- ➕ Add a light / ➕ Add a signal
+- ➖ Remove a light / ➖ Remove a signal
+- ⬆️ Reorder signals
+- 🔔 Configure notifications
+
+### Trigger Modes
+
+When adding a signal, choose a trigger mode:
+
+| Mode | Description | Example |
+|------|-------------|---------|
+| **Entity equals state** | Matches when an entity has a specific state | `binary_sensor.front_door` = `on` |
+| **Entity is on** | Matches when a binary entity is on | `binary_sensor.motion_detector` is on |
+| **Numeric above/below** | Matches when a sensor value crosses a threshold | `sensor.battery_level` < `20` |
+| **Template (advanced)** | Raw Jinja2 template for complex conditions | `{{ states('sensor.x') \| int > 5 }}` |
 
 ### Signal Examples
 
-#### Event signal: "Tess arrives home"
+#### Condition signal: "Front door open"
 ```yaml
-name: Tess Home
-priority: 1
+name: Front Door Open
+color: [255, 0, 0]  # red
+trigger_type: condition
+trigger_mode: entity_equals
+trigger_config:
+  entity_id: binary_sensor.front_door
+  state: "on"
+```
+
+#### Event signal: "Person A arrives home"
+```yaml
+name: Person A Home
 color: [255, 0, 255]  # magenta
 trigger_type: event
-template: "{{ is_state('person.tess', 'home') }}"
+trigger_mode: entity_equals
+trigger_config:
+  entity_id: person.a
+  state: "home"
 duration: 60  # show for 60 seconds
 ```
 
-#### Condition signal: "Back door open"
-```yaml
-name: Door Open
-priority: 2
-color: [255, 0, 0]  # red
-trigger_type: condition
-template: "{{ is_state('binary_sensor.back_door', 'on') }}"
-```
-
-#### Condition signal: "Sharky's collar battery low"
+#### Condition signal: "Low battery alert"
 ```yaml
 name: Low Battery
-priority: 5
 color: [255, 165, 0]  # orange
 trigger_type: condition
-template: "{{ states('sensor.sharky_collar_battery') | int < 20 }}"
+trigger_mode: numeric_threshold
+trigger_config:
+  entity_id: sensor.device_battery
+  threshold: 20
+  direction: below
 ```
+
+## Notifications
+
+Signal Lights can send persistent notifications when signals are active:
+
+- **HA Sidebar**: Uses `persistent_notification.create` with a stable tag (updates in place)
+- **Mobile apps**: Sends to configured notify targets (e.g., `notify.mobile_app_phone`)
+- **Auto-clear**: When all signals clear, notifications are dismissed automatically
+
+Configure via the Lovelace card or the options flow.
 
 ## Entities
 
@@ -79,12 +124,18 @@ template: "{{ states('sensor.sharky_collar_battery') | int < 20 }}"
 | `signal_lights.trigger_signal` | Manually fire an event signal by name |
 | `signal_lights.dismiss_signal` | Dismiss an active signal |
 | `signal_lights.refresh` | Force re-evaluation of all signals |
+| `signal_lights.add_light` | Register a light entity as a signal output |
+| `signal_lights.remove_light` | Unregister a light entity |
+| `signal_lights.add_signal` | Add a signal definition (supports trigger modes) |
+| `signal_lights.remove_signal` | Remove a signal definition by name |
+| `signal_lights.reorder_signals` | Reorder signals by providing a name list |
+| `signal_lights.configure_notifications` | Enable/disable notifications and set targets |
 
 ## How Priority Works
 
-- Each signal has an integer priority (lower = higher priority)
+- Signals are ordered by position (first = highest priority)
+- Priority is set by drag-to-reorder in the card or via the reorder service
 - The highest-priority active signal wins per light
-- Ties are broken by sort order
 - Signals can optionally be filtered to specific lights
 - When no signals are active, lights turn off
 

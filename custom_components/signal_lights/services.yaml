@@ -29,3 +29,146 @@ refresh:
   description: >
     Force re-evaluation of all signals and update light states immediately.
     Useful after changing signal configuration.
+
+add_light:
+  name: Add Light
+  description: Register a light entity as a signal output.
+  fields:
+    entity_id:
+      name: Light Entity
+      description: The light entity to register.
+      required: true
+      selector:
+        entity:
+          domain: light
+    brightness:
+      name: Brightness
+      description: Default brightness for this light (1-255).
+      default: 255
+      selector:
+        number:
+          min: 1
+          max: 255
+          mode: slider
+
+remove_light:
+  name: Remove Light
+  description: Unregister a light entity from signal outputs.
+  fields:
+    entity_id:
+      name: Light Entity
+      description: The light entity to remove.
+      required: true
+      selector:
+        entity:
+          domain: light
+
+add_signal:
+  name: Add Signal
+  description: >
+    Add a new signal definition. Signals are ordered by position (first = highest priority).
+    New signals are added to the end of the list.
+  fields:
+    name:
+      name: Signal Name
+      description: Unique name for this signal.
+      required: true
+      selector:
+        text:
+    color:
+      name: Color (RGB)
+      description: "RGB color as a list of 3 integers [R, G, B], each 0-255."
+      required: true
+      selector:
+        object:
+    trigger_type:
+      name: Trigger Type
+      description: "'event' (fires for a duration) or 'condition' (active while template is true)."
+      required: true
+      selector:
+        select:
+          options:
+            - event
+            - condition
+    trigger_mode:
+      name: Trigger Mode
+      description: "How the signal is triggered: entity_equals, entity_on, numeric_threshold, or template."
+      default: template
+      selector:
+        select:
+          options:
+            - entity_equals
+            - entity_on
+            - numeric_threshold
+            - template
+    trigger_config:
+      name: Trigger Configuration
+      description: "Configuration for the trigger mode (entity_id, state, threshold, direction)."
+      default: {}
+      selector:
+        object:
+    template:
+      name: Template
+      description: "Jinja2 template (auto-generated from trigger_mode if not provided)."
+      default: ""
+      selector:
+        template:
+    duration:
+      name: Duration (seconds)
+      description: "How long an event signal stays active (event type only, ignored for condition)."
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 86400
+          mode: box
+          unit_of_measurement: seconds
+    light_filter:
+      name: Light Filter
+      description: "Optional list of light entity IDs this signal applies to. Empty = all lights."
+      default: []
+      selector:
+        entity:
+          domain: light
+          multiple: true
+
+remove_signal:
+  name: Remove Signal
+  description: Remove a signal definition by name.
+  fields:
+    name:
+      name: Signal Name
+      description: The name of the signal to remove.
+      required: true
+      selector:
+        text:
+
+reorder_signals:
+  name: Reorder Signals
+  description: >
+    Reorder signals by providing a list of signal names in the desired order.
+    The first signal in the list becomes the highest priority.
+  fields:
+    order:
+      name: Signal Order
+      description: List of signal names in priority order (first = highest).
+      required: true
+      selector:
+        object:
+
+configure_notifications:
+  name: Configure Notifications
+  description: Enable or disable notifications and set notification targets.
+  fields:
+    enabled:
+      name: Enabled
+      description: Whether to send notifications for the active signal.
+      required: true
+      selector:
+        boolean:
+    targets:
+      name: Notify Targets
+      description: "List of notify service targets (e.g., notify.mobile_app_phone)."
+      default: []
+      selector:
+        object:

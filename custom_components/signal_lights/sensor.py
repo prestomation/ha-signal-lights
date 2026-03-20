@@ -69,11 +69,14 @@ class SignalLightsActiveSignalSensor(_SignalLightsSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return extra attributes including the full active signal list."""
+        """Return extra attributes including full config for the Lovelace card."""
         if self.coordinator.data is None:
             return {}
         return {
             "active_signals": self.coordinator.data.get("active_signal_names", []),
+            "signals": self.coordinator.data.get("signals", []),
+            "lights": self.coordinator.data.get("lights", []),
+            "notifications": self.coordinator.data.get("notifications", {}),
         }
 
 

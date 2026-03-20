@@ -12,18 +12,54 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+# ---------------------------------------------------------------------------
+# Trigger mode helpers
+# ---------------------------------------------------------------------------
+
+TRIGGER_MODES = ("entity_equals", "entity_on", "numeric_threshold", "template")
+
+
+def generate_template_from_trigger(trigger_mode: str, trigger_config: dict[str, Any]) -> str:
+    """Generate a Jinja2 template string from a trigger mode and config.
+
+    Returns the template string, or empty string if mode is unrecognised.
+    """
+    if trigger_mode == "entity_equals":
+        entity_id = trigger_config.get("entity_id", "")
+        state = trigger_config.get("state", "")
+        return f"{{{{ is_state('{entity_id}', '{state}') }}}}"
+
+    if trigger_mode == "entity_on":
+        entity_id = trigger_config.get("entity_id", "")
+        return f"{{{{ is_state('{entity_id}', 'on') }}}}"
+
+    if trigger_mode == "numeric_threshold":
+        entity_id = trigger_config.get("entity_id", "")
+        threshold = trigger_config.get("threshold", 0)
+        direction = trigger_config.get("direction", "above")
+        op = ">" if direction == "above" else "<"
+        return f"{{{{ states('{entity_id}') | float(0) {op} {threshold} }}}}"
+
+    if trigger_mode == "template":
+        return trigger_config.get("template", "")
+
+    return ""
+
+
 @dataclass
 class Signal:
     """A single signal definition."""
 
     name: str
-    priority: int  # lower = higher priority
     color: tuple[int, int, int]  # RGB
     trigger_type: str  # "event" or "condition"
     template: str  # Jinja2 template string
+    priority: int = 0  # deprecated — kept for backward compat
     duration: int = 0  # seconds, event type only
     light_filter: list[str] = field(default_factory=list)  # empty = all lights
-    sort_order: int = 0  # for tie-breaking within same priority
+    sort_order: int = 0  # position in priority list (lower = higher priority)
+    trigger_mode: str = "template"  # entity_equals, entity_on, numeric_threshold, template
+    trigger_config: dict[str, Any] = field(default_factory=dict)
 
     def applies_to_light(self, light_entity_id: str) -> bool:
         """Return True if this signal applies to the given light."""
@@ -61,6 +97,9 @@ class SignalEngine:
 
     This is the core evaluation engine. It maintains a list of active signals
     and determines what color each light should display.
+
+    Priority is determined by sort_order (lower = higher priority).
+    The legacy 'priority' field is ignored; ordering is purely by sort_order.
     """
 
     def __init__(self) -> None:
@@ -133,11 +172,11 @@ class SignalEngine:
         return expired
 
     def get_active_signals(self) -> list[ActiveSignal]:
-        """Return currently active (non-expired) signals, sorted by priority then sort_order."""
+        """Return currently active (non-expired) signals, sorted by sort_order."""
         self.cleanup_expired()
         return sorted(
             self._active,
-            key=lambda a: (a.signal.priority, a.signal.sort_order),
+            key=lambda a: a.signal.sort_order,
         )
 
     def get_winning_signal_for_light(self, light_entity_id: str) -> Signal | None:
