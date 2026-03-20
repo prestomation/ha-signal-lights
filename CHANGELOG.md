@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.1.0] - 2026-03-20
+## [Unreleased] - 2026-03-20
 
 ### Added
 - **Trigger modes**: Entity equals state, Entity is on, Numeric above/below, Template (advanced)
