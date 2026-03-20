@@ -35,6 +35,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .const import STORAGE_KEY, STORAGE_VERSION
+from .engine import generate_template_from_trigger, validate_trigger_config
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -73,6 +74,35 @@ class SignalLightsStore:
                 sig["trigger_mode"] = "template"
             if "trigger_config" not in sig:
                 sig["trigger_config"] = {}
+
+        # Validate and attempt to recover signals on load
+        for sig in self._data["signals"]:
+            trigger_mode = sig.get("trigger_mode", "template")
+            template = sig.get("template", "")
+            trigger_config = sig.get("trigger_config", {})
+
+            # Try to regenerate template if missing for non-template modes
+            if trigger_mode != "template" and not template:
+                errors = validate_trigger_config(trigger_mode, trigger_config)
+                if not errors:
+                    try:
+                        regenerated = generate_template_from_trigger(trigger_mode, trigger_config)
+                        sig["template"] = regenerated
+                        _LOGGER.debug(
+                            "Signal Lights: regenerated template for signal '%s'", sig.get("name", "?")
+                        )
+                    except ValueError as err:
+                        _LOGGER.warning(
+                            "Signal Lights: signal '%s' has empty template and invalid trigger config — "
+                            "it will not fire: %s",
+                            sig.get("name", "?"), err,
+                        )
+                else:
+                    _LOGGER.warning(
+                        "Signal Lights: signal '%s' has empty template and invalid trigger config — "
+                        "it will not fire: %s",
+                        sig.get("name", "?"), "; ".join(errors),
+                    )
 
     async def save(self) -> None:
         """Persist configuration to disk."""

@@ -529,8 +529,8 @@ class SignalLightsCard extends HTMLElement {
       form.innerHTML = `
         <div class="inline-form-inner">
           <div class="form-row">
-            <label>Light entity ID</label>
-            <input type="text" id="sl-new-light-entity" placeholder="light.desk_lamp" />
+            <label>Light entity</label>
+            <div id="sl-new-light-entity-container"></div>
           </div>
           <div class="form-row">
             <label>Brightness (1-255)</label>
@@ -544,12 +544,20 @@ class SignalLightsCard extends HTMLElement {
         </div>
       `;
 
+      // Create HA entity picker programmatically
+      const lightPicker = document.createElement('ha-entity-picker');
+      lightPicker.hass = this._hass;
+      lightPicker.includeDomains = ['light'];
+      lightPicker.allowCustomEntity = true;
+      lightPicker.id = 'sl-new-light-entity';
+      form.querySelector('#sl-new-light-entity-container').appendChild(lightPicker);
+
       const slider = form.querySelector('#sl-new-light-brightness');
       const valSpan = form.querySelector('#sl-brightness-val');
       slider.addEventListener('input', () => { valSpan.textContent = slider.value; });
 
       form.querySelector('#sl-add-light-submit').addEventListener('click', () => {
-        const entityId = form.querySelector('#sl-new-light-entity').value.trim();
+        const entityId = lightPicker.value || '';
         const brightness = parseInt(slider.value);
         if (!entityId) return;
         this._callService('signal_lights', 'add_light', {
@@ -589,13 +597,14 @@ class SignalLightsCard extends HTMLElement {
   _renderAddSignalForm(form) {
     const mode = this._addSignalMode;
 
+    // Use placeholder divs for entity pickers — we'll inject ha-entity-picker after innerHTML
     let triggerFields = '';
     switch (mode) {
       case 'entity_equals':
         triggerFields = `
           <div class="form-row">
-            <label>Entity ID</label>
-            <input type="text" id="sl-sig-entity" placeholder="binary_sensor.front_door" />
+            <label>Entity</label>
+            <div id="sl-sig-entity-container" class="entity-picker-container"></div>
           </div>
           <div class="form-row">
             <label>Target state</label>
@@ -606,16 +615,16 @@ class SignalLightsCard extends HTMLElement {
       case 'entity_on':
         triggerFields = `
           <div class="form-row">
-            <label>Entity ID</label>
-            <input type="text" id="sl-sig-entity" placeholder="binary_sensor.motion" />
+            <label>Entity</label>
+            <div id="sl-sig-entity-container" class="entity-picker-container"></div>
           </div>
         `;
         break;
       case 'numeric_threshold':
         triggerFields = `
           <div class="form-row">
-            <label>Sensor entity ID</label>
-            <input type="text" id="sl-sig-entity" placeholder="sensor.temperature" />
+            <label>Sensor entity</label>
+            <div id="sl-sig-entity-container" class="entity-picker-container"></div>
           </div>
           <div class="form-row">
             <label>Threshold</label>
@@ -648,7 +657,12 @@ class SignalLightsCard extends HTMLElement {
         </div>
         <div class="form-row">
           <label>Color</label>
-          <input type="color" id="sl-sig-color" value="#ff0000" />
+          <div class="color-picker-row">
+            <div id="sl-sig-color-preview" class="color-preview" style="background:#ff0000"></div>
+            <label>R</label><input type="number" id="sl-sig-color-r" min="0" max="255" value="255" class="rgb-input" />
+            <label>G</label><input type="number" id="sl-sig-color-g" min="0" max="255" value="0" class="rgb-input" />
+            <label>B</label><input type="number" id="sl-sig-color-b" min="0" max="255" value="0" class="rgb-input" />
+          </div>
         </div>
         <div class="form-row">
           <label>Trigger type</label>
@@ -684,6 +698,21 @@ class SignalLightsCard extends HTMLElement {
       this._renderAddSignalForm(form);
     });
 
+    // Inject ha-entity-picker into the placeholder container if present
+    const entityContainer = form.querySelector('#sl-sig-entity-container');
+    if (entityContainer) {
+      const entityPicker = document.createElement('ha-entity-picker');
+      entityPicker.hass = this._hass;
+      entityPicker.allowCustomEntity = true;
+      entityPicker.id = 'sl-sig-entity';
+      if (mode === 'entity_on') {
+        entityPicker.includeDomains = ['binary_sensor', 'switch', 'light', 'input_boolean'];
+      } else if (mode === 'numeric_threshold') {
+        entityPicker.includeDomains = ['sensor'];
+      }
+      entityContainer.appendChild(entityPicker);
+    }
+
     // Show duration for event type
     const typeSelect = form.querySelector('#sl-sig-trigger-type');
     const durationRow = form.querySelector('#sl-sig-duration-row');
@@ -691,13 +720,27 @@ class SignalLightsCard extends HTMLElement {
       durationRow.style.display = typeSelect.value === 'event' ? 'block' : 'none';
     });
 
+    // Live color preview update
+    const colorPreview = form.querySelector('#sl-sig-color-preview');
+    ['r', 'g', 'b'].forEach(ch => {
+      form.querySelector(`#sl-sig-color-${ch}`).addEventListener('input', () => {
+        const r = form.querySelector('#sl-sig-color-r').value || 0;
+        const g = form.querySelector('#sl-sig-color-g').value || 0;
+        const b = form.querySelector('#sl-sig-color-b').value || 0;
+        colorPreview.style.background = `rgb(${r},${g},${b})`;
+      });
+    });
+
     // Submit handler
     form.querySelector('#sl-add-signal-submit').addEventListener('click', () => {
       const name = form.querySelector('#sl-sig-name').value.trim();
       if (!name) return;
 
-      const colorHex = form.querySelector('#sl-sig-color').value;
-      const color = _hexToRgb(colorHex);
+      const color = [
+        parseInt(form.querySelector('#sl-sig-color-r').value) || 0,
+        parseInt(form.querySelector('#sl-sig-color-g').value) || 0,
+        parseInt(form.querySelector('#sl-sig-color-b').value) || 0,
+      ];
       const triggerType = typeSelect.value;
       const triggerMode = this._addSignalMode;
       const duration = triggerType === 'event' ? parseInt(form.querySelector('#sl-sig-duration').value || '60') : 0;
@@ -707,18 +750,18 @@ class SignalLightsCard extends HTMLElement {
 
       switch (triggerMode) {
         case 'entity_equals': {
-          const entityId = form.querySelector('#sl-sig-entity').value.trim();
+          const entityId = (form.querySelector('#sl-sig-entity').value || '').trim();
           const state = form.querySelector('#sl-sig-state').value.trim();
           triggerConfig = { entity_id: entityId, state };
           break;
         }
         case 'entity_on': {
-          const entityId = form.querySelector('#sl-sig-entity').value.trim();
+          const entityId = (form.querySelector('#sl-sig-entity').value || '').trim();
           triggerConfig = { entity_id: entityId };
           break;
         }
         case 'numeric_threshold': {
-          const entityId = form.querySelector('#sl-sig-entity').value.trim();
+          const entityId = (form.querySelector('#sl-sig-entity').value || '').trim();
           const threshold = parseFloat(form.querySelector('#sl-sig-threshold').value || '0');
           const direction = form.querySelector('#sl-sig-direction').value;
           triggerConfig = { entity_id: entityId, threshold, direction };
@@ -1063,6 +1106,38 @@ class SignalLightsCard extends HTMLElement {
         color: var(--primary-text-color);
         font-size: 13px;
         font-family: inherit;
+      }
+      .color-picker-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .color-picker-row label {
+        font-size: 12px;
+        color: var(--secondary-text-color);
+        min-width: auto;
+        margin: 0;
+      }
+      .color-preview {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        border: 2px solid var(--divider-color, #e0e0e0);
+        flex-shrink: 0;
+      }
+      .rgb-input {
+        width: 52px;
+        padding: 4px 6px;
+        border: 1px solid var(--divider-color, #e0e0e0);
+        border-radius: 4px;
+        background: var(--card-background-color, #fff);
+        color: var(--primary-text-color);
+        font-size: 13px;
+        text-align: center;
+      }
+      .rgb-input:focus {
+        outline: none;
+        border-color: var(--primary-color);
       }
       .form-row input[type="color"] {
         width: 48px; height: 32px;

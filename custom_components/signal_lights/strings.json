@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Set up Signal Lights",
-        "description": "Create a Signal Lights instance to manage notification colors on your lights.",
+        "description": "Create a Signal Lights instance to manage notification colors on your lights.\n\n**How it works:** Register lights as outputs, then define signals with colors and conditions. The highest-priority active signal's color is pushed to your lights. When no signals are active, lights turn off.",
         "data": {
           "name": "Name"
         }
@@ -14,29 +14,29 @@
     "step": {
       "init": {
         "title": "Signal Lights Configuration",
-        "description": "**Lights ({light_count}):** {light_list}\n\n**Signals ({signal_count}):** {signal_list}",
+        "description": "**Lights ({light_count}):** {light_list}\n\n**Signals ({signal_count}):** {signal_list}\n\n⚠️ **Recommended:** Use the **Signal Lights dashboard card** (`custom:signal-lights-card`) for the best experience — it has drag-to-reorder, color previews, and inline editing. This options flow works but is limited by Home Assistant's form system.",
         "data": {
           "action": "What would you like to do?"
         }
       },
       "add_light": {
         "title": "Add Light",
-        "description": "Choose a light entity to use as a signal output.",
+        "description": "Choose a light entity to use as a signal output. When a signal is active, this light will show the signal's color at the brightness you set here.",
         "data": {
           "entity_id": "Light",
-          "brightness": "Brightness"
+          "brightness": "Brightness (how bright this light should be when showing a signal)"
         }
       },
       "remove_light": {
         "title": "Remove Light",
-        "description": "Select a light to remove from signal outputs.",
+        "description": "Select a light to stop using as a signal output. The light will no longer be controlled by Signal Lights.",
         "data": {
           "entity_id": "Light"
         }
       },
       "add_signal": {
         "title": "Add Signal",
-        "description": "Define a new signal. Signals are prioritized by their position in the list.",
+        "description": "Define a new signal. Signals are prioritized by their position in the list — signals added first are higher priority. You can reorder them later.\n\n**Trigger types:**\n- **Condition** — stays active as long as the condition is true (e.g., door is open)\n- **Event** — activates for a set duration then expires (e.g., someone arrives home → show for 60s)",
         "data": {
           "name": "Signal name",
           "color": "Color",
@@ -46,64 +46,64 @@
       },
       "trigger_entity_equals": {
         "title": "Signal: {signal_name} — Entity equals state",
-        "description": "Pick an entity and the state value to match.",
+        "description": "This signal will activate when the entity's state matches the value you enter.\n\n**Examples:** person.someone = `home`, binary_sensor.door = `on`, input_select.mode = `away`",
         "data": {
           "entity_id": "Entity",
-          "state_value": "State value (e.g., home, on, open)",
-          "duration": "Duration (seconds)",
-          "light_filter": "Only show on these lights (leave empty for all)"
+          "state_value": "State value to match (e.g., home, on, open)",
+          "duration": "Duration in seconds (event signals only — ignored for conditions)",
+          "light_filter": "Limit to specific lights (leave empty to show on ALL registered lights)"
         }
       },
       "trigger_entity_on": {
         "title": "Signal: {signal_name} — Entity is on",
-        "description": "Pick an entity that should be 'on' to activate this signal.",
+        "description": "This signal will activate whenever the selected entity is **on**. Works with binary sensors, switches, lights, and input booleans.\n\n**Examples:** binary_sensor.back_door (open = on), switch.heater, input_boolean.guest_mode",
         "data": {
           "entity_id": "Entity",
-          "duration": "Duration (seconds)",
-          "light_filter": "Only show on these lights (leave empty for all)"
+          "duration": "Duration in seconds (event signals only — ignored for conditions)",
+          "light_filter": "Limit to specific lights (leave empty to show on ALL registered lights)"
         }
       },
       "trigger_numeric": {
         "title": "Signal: {signal_name} — Numeric threshold",
-        "description": "Pick a sensor entity and a numeric threshold.",
+        "description": "This signal will activate when a sensor's numeric value crosses a threshold.\n\n**Examples:** Battery below 20%, temperature above 90°F, humidity below 30%",
         "data": {
           "entity_id": "Sensor entity",
           "threshold": "Threshold value",
-          "direction": "Direction",
-          "duration": "Duration (seconds)",
-          "light_filter": "Only show on these lights (leave empty for all)"
+          "direction": "Activate when value is above or below the threshold",
+          "duration": "Duration in seconds (event signals only — ignored for conditions)",
+          "light_filter": "Limit to specific lights (leave empty to show on ALL registered lights)"
         }
       },
       "trigger_template": {
-        "title": "Signal: {signal_name}",
-        "description": "Set the template for this {trigger_type} signal. The template should evaluate to true/false.",
+        "title": "Signal: {signal_name} — Advanced template",
+        "description": "Write a Jinja2 template that evaluates to `true` or `false`. The signal activates when the template result is truthy.\n\n**Examples:**\n`{{ states('sensor.battery') | int < 20 }}`\n`{{ is_state('person.someone', 'home') and is_state('input_boolean.alerts', 'on') }}`",
         "data": {
           "template": "Template",
-          "duration": "Duration (seconds)",
-          "light_filter": "Only show on these lights (leave empty for all)"
+          "duration": "Duration in seconds (event signals only — ignored for conditions)",
+          "light_filter": "Limit to specific lights (leave empty to show on ALL registered lights)"
         }
       },
       "remove_signal": {
         "title": "Remove Signal",
-        "description": "Select a signal to remove.",
+        "description": "Select a signal to permanently remove.",
         "data": {
           "name": "Signal"
         }
       },
       "reorder_signals": {
         "title": "Reorder Signals",
-        "description": "Select a signal and its new position. Position 1 = highest priority.",
+        "description": "Move a signal to a new position. **Position 1 = highest priority** — it will be shown first when multiple signals are active at the same time.",
         "data": {
           "signal": "Signal to move",
-          "position": "New position"
+          "position": "New position (1 = highest priority)"
         }
       },
       "configure_notifications": {
         "title": "Configure Notifications",
-        "description": "Send notifications when signals are active. Currently {current_status}.",
+        "description": "Optionally send persistent notifications when signals are active. The notification shows the highest-priority active signal name, updates in place (never stacks), and auto-clears when all signals go inactive.\n\nCurrently **{current_status}**.",
         "data": {
           "enabled": "Enable notifications",
-          "targets": "Notify targets (comma-separated, e.g., notify.mobile_app_phone)"
+          "targets": "Mobile notify targets (comma-separated, e.g., notify.mobile_app_phone)"
         }
       }
     },

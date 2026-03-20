@@ -11,7 +11,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
 from .coordinator import SignalLightsCoordinator
-from .engine import generate_template_from_trigger
+from .engine import generate_template_from_trigger, validate_trigger_config
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -170,13 +170,62 @@ async def async_register_services(hass: HomeAssistant) -> None:
         trigger_mode = call.data.get("trigger_mode", "template")
         trigger_config = call.data.get("trigger_config", {})
         template = call.data.get("template", "")
+        name = call.data["name"]
+
+        # Check for duplicate signal names
+        if coord.store.get_signal_by_name(name) is not None:
+            _LOGGER.error(
+                "Signal Lights: signal named '%s' already exists, cannot add duplicate",
+                name,
+            )
+            return
+
+        # Validate trigger config before generating the template
+        if trigger_mode != "template" or not template:
+            errors = validate_trigger_config(trigger_mode, trigger_config)
+            if errors:
+                _LOGGER.error(
+                    "Signal Lights: invalid trigger config for signal '%s': %s",
+                    name,
+                    "; ".join(errors),
+                )
+                return
 
         # Generate template from trigger mode if not raw template
         if trigger_mode != "template" and not template:
-            template = generate_template_from_trigger(trigger_mode, trigger_config)
+            try:
+                template = generate_template_from_trigger(trigger_mode, trigger_config)
+            except ValueError as err:
+                _LOGGER.error(
+                    "Signal Lights: failed to generate template for signal '%s': %s",
+                    name, err,
+                )
+                return
+
+        # Validate Jinja2 syntax
+        if template:
+            try:
+                from homeassistant.helpers.template import Template as HaTemplate
+                HaTemplate(template)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.error(
+                    "Signal Lights: template for signal '%s' has invalid Jinja2 syntax: %s",
+                    name, err,
+                )
+                return
+
+        # Warn about non-existent entities (not an error — entity might appear later)
+        entity_id = trigger_config.get("entity_id", "")
+        if entity_id and trigger_mode in ("entity_equals", "entity_on", "numeric_threshold"):
+            if hass.states.get(entity_id) is None:
+                _LOGGER.warning(
+                    "Signal Lights: entity '%s' used in signal '%s' does not currently exist "
+                    "(it may appear later)",
+                    entity_id, name,
+                )
 
         signal_def = {
-            "name": call.data["name"],
+            "name": name,
             "color": list(call.data["color"]),
             "trigger_type": call.data["trigger_type"],
             "trigger_mode": trigger_mode,
@@ -187,7 +236,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
         }
         await coord.store.add_signal(signal_def)
         await coord.async_reload_config()
-        _LOGGER.info("Signal Lights: added signal '%s'", signal_def["name"])
+        _LOGGER.info("Signal Lights: added signal '%s'", name)
 
     hass.services.async_register(
         DOMAIN, "add_signal", handle_add_signal, schema=ADD_SIGNAL_SCHEMA

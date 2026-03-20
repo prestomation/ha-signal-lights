@@ -22,7 +22,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 
 from .const import DOMAIN
-from .engine import generate_template_from_trigger
+from .engine import generate_template_from_trigger, validate_trigger_config
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -457,14 +457,38 @@ class SignalLightsOptionsFlow(OptionsFlow):
 
     async def _finalize_signal(self, user_input: dict[str, Any]) -> ConfigFlowResult:
         """Save the signal to the store and reload."""
+        trigger_mode = self._signal_data.get("trigger_mode", "template")
+        trigger_config = self._signal_data.get("trigger_config", {})
+
+        # Validate trigger config before saving
+        errors = validate_trigger_config(trigger_mode, trigger_config)
+        if errors:
+            _LOGGER.error(
+                "Signal Lights (options flow): invalid trigger config for signal '%s': %s",
+                self._signal_data.get("name", "?"),
+                "; ".join(errors),
+            )
+            # Show the appropriate form again with errors
+            step_map = {
+                "entity_equals": self.async_step_trigger_entity_equals,
+                "entity_on": self.async_step_trigger_entity_on,
+                "numeric_threshold": self.async_step_trigger_numeric,
+                "template": self.async_step_trigger_template,
+            }
+            step_fn = step_map.get(trigger_mode)
+            if step_fn is not None:
+                return await step_fn()
+            # Fallback: abort
+            return self.async_abort(reason="invalid_trigger_config")
+
         store = self._get_store()
         if store:
             signal_def = {
                 "name": self._signal_data["name"],
                 "color": self._signal_data["color"],
                 "trigger_type": self._signal_data["trigger_type"],
-                "trigger_mode": self._signal_data["trigger_mode"],
-                "trigger_config": self._signal_data.get("trigger_config", {}),
+                "trigger_mode": trigger_mode,
+                "trigger_config": trigger_config,
                 "template": self._signal_data.get("template", ""),
                 "duration": int(user_input.get("duration", 0)),
                 "light_filter": user_input.get("light_filter", []),

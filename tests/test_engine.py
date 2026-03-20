@@ -28,6 +28,7 @@ LightConfig = _engine_mod.LightConfig
 ActiveSignal = _engine_mod.ActiveSignal
 SignalEngine = _engine_mod.SignalEngine
 generate_template_from_trigger = _engine_mod.generate_template_from_trigger
+validate_trigger_config = _engine_mod.validate_trigger_config
 
 
 # ---------------------------------------------------------------------------
@@ -612,10 +613,10 @@ class TestTriggerModes:
         template = generate_template_from_trigger("unknown_mode", {})
         assert template == ""
 
-    def test_entity_equals_missing_fields_uses_empty_strings(self):
-        """entity_equals with missing fields uses empty strings."""
-        template = generate_template_from_trigger("entity_equals", {})
-        assert template == "{{ is_state('', '') }}"
+    def test_entity_equals_missing_fields_raises_value_error(self):
+        """entity_equals with missing fields raises ValueError."""
+        with pytest.raises(ValueError, match="entity_id is required"):
+            generate_template_from_trigger("entity_equals", {})
 
 
 # ---------------------------------------------------------------------------
@@ -676,3 +677,195 @@ class TestSortOrderOnly:
         # sort_order=0 wins regardless of priority field
         winner = engine.get_global_winner()
         assert winner.name == "high_prio_but_low_order"
+
+
+# ---------------------------------------------------------------------------
+# Trigger config validation
+# ---------------------------------------------------------------------------
+
+
+class TestTriggerValidation:
+    """Test validate_trigger_config for all trigger modes."""
+
+    # --- entity_equals ---
+
+    def test_entity_equals_valid(self):
+        """entity_equals with all required fields returns no errors."""
+        errors = validate_trigger_config(
+            "entity_equals",
+            {"entity_id": "binary_sensor.door", "state": "on"},
+        )
+        assert errors == []
+
+    def test_entity_equals_missing_entity_id(self):
+        """entity_equals without entity_id returns an error."""
+        errors = validate_trigger_config("entity_equals", {"state": "on"})
+        assert any("entity_id" in e for e in errors)
+
+    def test_entity_equals_empty_entity_id(self):
+        """entity_equals with empty entity_id returns an error."""
+        errors = validate_trigger_config("entity_equals", {"entity_id": "", "state": "on"})
+        assert any("entity_id" in e for e in errors)
+
+    def test_entity_equals_missing_state(self):
+        """entity_equals without state returns an error."""
+        errors = validate_trigger_config("entity_equals", {"entity_id": "binary_sensor.door"})
+        assert any("state" in e for e in errors)
+
+    def test_entity_equals_empty_state(self):
+        """entity_equals with empty state returns an error."""
+        errors = validate_trigger_config(
+            "entity_equals", {"entity_id": "binary_sensor.door", "state": ""}
+        )
+        assert any("state" in e for e in errors)
+
+    def test_entity_equals_both_missing(self):
+        """entity_equals with no fields returns two errors."""
+        errors = validate_trigger_config("entity_equals", {})
+        assert len(errors) == 2
+
+    # --- entity_on ---
+
+    def test_entity_on_valid(self):
+        """entity_on with entity_id returns no errors."""
+        errors = validate_trigger_config("entity_on", {"entity_id": "switch.fan"})
+        assert errors == []
+
+    def test_entity_on_missing_entity_id(self):
+        """entity_on without entity_id returns an error."""
+        errors = validate_trigger_config("entity_on", {})
+        assert any("entity_id" in e for e in errors)
+
+    def test_entity_on_empty_entity_id(self):
+        """entity_on with empty entity_id returns an error."""
+        errors = validate_trigger_config("entity_on", {"entity_id": "  "})
+        assert any("entity_id" in e for e in errors)
+
+    # --- numeric_threshold ---
+
+    def test_numeric_threshold_valid(self):
+        """numeric_threshold with all valid fields returns no errors."""
+        errors = validate_trigger_config(
+            "numeric_threshold",
+            {"entity_id": "sensor.temp", "threshold": 30, "direction": "above"},
+        )
+        assert errors == []
+
+    def test_numeric_threshold_valid_below(self):
+        """numeric_threshold with direction=below is valid."""
+        errors = validate_trigger_config(
+            "numeric_threshold",
+            {"entity_id": "sensor.battery", "threshold": 20.5, "direction": "below"},
+        )
+        assert errors == []
+
+    def test_numeric_threshold_missing_entity_id(self):
+        """numeric_threshold without entity_id returns an error."""
+        errors = validate_trigger_config(
+            "numeric_threshold",
+            {"threshold": 30, "direction": "above"},
+        )
+        assert any("entity_id" in e for e in errors)
+
+    def test_numeric_threshold_missing_threshold(self):
+        """numeric_threshold without threshold returns an error."""
+        errors = validate_trigger_config(
+            "numeric_threshold",
+            {"entity_id": "sensor.temp", "direction": "above"},
+        )
+        assert any("threshold" in e for e in errors)
+
+    def test_numeric_threshold_non_numeric_threshold(self):
+        """numeric_threshold with non-numeric threshold returns an error."""
+        errors = validate_trigger_config(
+            "numeric_threshold",
+            {"entity_id": "sensor.temp", "threshold": "hot", "direction": "above"},
+        )
+        assert any("threshold" in e and "numeric" in e for e in errors)
+
+    def test_numeric_threshold_invalid_direction(self):
+        """numeric_threshold with invalid direction returns an error."""
+        errors = validate_trigger_config(
+            "numeric_threshold",
+            {"entity_id": "sensor.temp", "threshold": 30, "direction": "sideways"},
+        )
+        assert any("direction" in e for e in errors)
+
+    def test_numeric_threshold_all_missing(self):
+        """numeric_threshold with empty config returns multiple errors."""
+        errors = validate_trigger_config("numeric_threshold", {})
+        assert len(errors) >= 3  # entity_id, threshold, direction
+
+    # --- template ---
+
+    def test_template_valid(self):
+        """template mode with non-empty template returns no errors."""
+        errors = validate_trigger_config(
+            "template", {"template": "{{ is_state('sensor.x', 'on') }}"}
+        )
+        assert errors == []
+
+    def test_template_missing_key(self):
+        """template mode with no template key returns an error."""
+        errors = validate_trigger_config("template", {})
+        assert any("template" in e for e in errors)
+
+    def test_template_empty_string(self):
+        """template mode with empty template string returns an error."""
+        errors = validate_trigger_config("template", {"template": ""})
+        assert any("template" in e for e in errors)
+
+    def test_template_whitespace_only(self):
+        """template mode with whitespace-only template returns an error."""
+        errors = validate_trigger_config("template", {"template": "   "})
+        assert any("template" in e for e in errors)
+
+    # --- generate_template_from_trigger raises ValueError ---
+
+    def test_generate_raises_for_invalid_entity_equals(self):
+        """generate_template_from_trigger raises ValueError for invalid entity_equals."""
+        with pytest.raises(ValueError):
+            generate_template_from_trigger("entity_equals", {})
+
+    def test_generate_raises_for_invalid_entity_on(self):
+        """generate_template_from_trigger raises ValueError for invalid entity_on."""
+        with pytest.raises(ValueError):
+            generate_template_from_trigger("entity_on", {"entity_id": ""})
+
+    def test_generate_raises_for_invalid_numeric_threshold(self):
+        """generate_template_from_trigger raises ValueError for invalid numeric_threshold."""
+        with pytest.raises(ValueError):
+            generate_template_from_trigger("numeric_threshold", {})
+
+    def test_generate_raises_for_invalid_template(self):
+        """generate_template_from_trigger raises ValueError for empty template mode."""
+        with pytest.raises(ValueError):
+            generate_template_from_trigger("template", {"template": ""})
+
+    def test_generate_succeeds_for_valid_entity_equals(self):
+        """generate_template_from_trigger returns correct template for valid config."""
+        result = generate_template_from_trigger(
+            "entity_equals", {"entity_id": "binary_sensor.door", "state": "on"}
+        )
+        assert result == "{{ is_state('binary_sensor.door', 'on') }}"
+
+    def test_generate_succeeds_for_valid_entity_on(self):
+        """generate_template_from_trigger returns correct template for valid entity_on."""
+        result = generate_template_from_trigger(
+            "entity_on", {"entity_id": "switch.fan"}
+        )
+        assert result == "{{ is_state('switch.fan', 'on') }}"
+
+    def test_generate_succeeds_for_valid_numeric_threshold(self):
+        """generate_template_from_trigger returns correct template for valid numeric."""
+        result = generate_template_from_trigger(
+            "numeric_threshold",
+            {"entity_id": "sensor.temp", "threshold": 30, "direction": "above"},
+        )
+        assert result == "{{ states('sensor.temp') | float(0) > 30 }}"
+
+    def test_generate_succeeds_for_valid_template(self):
+        """generate_template_from_trigger returns raw template for template mode."""
+        raw = "{{ states('sensor.x') | int > 5 }}"
+        result = generate_template_from_trigger("template", {"template": raw})
+        assert result == raw

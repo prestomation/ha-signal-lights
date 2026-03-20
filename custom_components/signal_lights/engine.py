@@ -19,11 +19,59 @@ from typing import Any
 TRIGGER_MODES = ("entity_equals", "entity_on", "numeric_threshold", "template")
 
 
+def validate_trigger_config(trigger_mode: str, trigger_config: dict[str, Any]) -> list[str]:
+    """Validate trigger_config for the given trigger_mode.
+
+    Returns a list of error strings. An empty list means the config is valid.
+    """
+    errors: list[str] = []
+
+    if trigger_mode == "entity_equals":
+        if not str(trigger_config.get("entity_id", "")).strip():
+            errors.append("entity_id is required for entity_equals mode")
+        if not str(trigger_config.get("state", "")).strip():
+            errors.append("state is required for entity_equals mode")
+
+    elif trigger_mode == "entity_on":
+        if not str(trigger_config.get("entity_id", "")).strip():
+            errors.append("entity_id is required for entity_on mode")
+
+    elif trigger_mode == "numeric_threshold":
+        if not str(trigger_config.get("entity_id", "")).strip():
+            errors.append("entity_id is required for numeric_threshold mode")
+        threshold = trigger_config.get("threshold")
+        if threshold is None:
+            errors.append("threshold is required for numeric_threshold mode")
+        else:
+            try:
+                float(threshold)
+            except (TypeError, ValueError):
+                errors.append(f"threshold must be numeric, got: {threshold!r}")
+        direction = trigger_config.get("direction")
+        if direction not in ("above", "below"):
+            errors.append(
+                f"direction must be 'above' or 'below', got: {direction!r}"
+            )
+
+    elif trigger_mode == "template":
+        if not str(trigger_config.get("template", "")).strip():
+            errors.append("template is required for template mode")
+
+    return errors
+
+
 def generate_template_from_trigger(trigger_mode: str, trigger_config: dict[str, Any]) -> str:
     """Generate a Jinja2 template string from a trigger mode and config.
 
     Returns the template string, or empty string if mode is unrecognised.
+    Raises ValueError if trigger_config is invalid for the given mode.
     """
+    errors = validate_trigger_config(trigger_mode, trigger_config)
+    if errors:
+        raise ValueError(
+            f"Invalid trigger config for mode '{trigger_mode}': {'; '.join(errors)}"
+        )
+
     if trigger_mode == "entity_equals":
         entity_id = trigger_config.get("entity_id", "")
         state = trigger_config.get("state", "")

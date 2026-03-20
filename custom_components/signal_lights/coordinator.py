@@ -52,6 +52,7 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.engine = SignalEngine()
         self._template_unsubs: list[Any] = []
         self._last_notified_signal: str | None = None
+        self._signal_errors: dict[str, str] = {}
 
     async def async_setup(self) -> None:
         """Set up the engine from stored configuration and start template tracking."""
@@ -89,14 +90,23 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def _setup_template_listeners(self) -> None:
         """Set up template listeners for all signals."""
         for unsub in self._template_unsubs:
-            unsub()
+            unsub.async_remove()
         self._template_unsubs.clear()
+        self._signal_errors = {}
 
         for signal in self.engine.signals:
             if not signal.template:
                 continue
 
-            template = Template(signal.template, self.hass)
+            try:
+                template = Template(signal.template, self.hass)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.error(
+                    "Signal Lights: signal '%s' has an invalid template and will be skipped: %s",
+                    signal.name, err,
+                )
+                self._signal_errors[signal.name] = str(err)
+                continue
 
             @callback
             def _template_changed(
@@ -274,6 +284,7 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "signals": signals_info,
             "lights": self.store.get_lights(),
             "notifications": self.store.get_notification_config(),
+            "signal_errors": dict(self._signal_errors),
         }
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -330,7 +341,7 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_shutdown(self) -> None:
         """Clean up template listeners on shutdown."""
         for unsub in self._template_unsubs:
-            unsub()
+            unsub.async_remove()
         self._template_unsubs.clear()
 
 
