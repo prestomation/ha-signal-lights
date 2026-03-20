@@ -33,6 +33,7 @@ CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 from .coordinator import SignalLightsCoordinator
 from .services import async_register_services, async_unregister_services
 from .store import SignalLightsStore
+from .websocket import async_register_websocket_commands
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -156,6 +157,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await async_register_services(hass)
+
+    # Register WebSocket commands once (guard with a sentinel in hass.data[DOMAIN])
+    if not hass.data[DOMAIN].get("_ws_registered"):
+        async_register_websocket_commands(hass)
+        hass.data[DOMAIN]["_ws_registered"] = True
 
     return True
 
