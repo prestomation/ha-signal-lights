@@ -27,12 +27,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
-from .const import DOMAIN, PLATFORMS, URL_BASE, CARD_VERSION
+from .const import DOMAIN, DOMAIN_GLOBAL, PLATFORMS, URL_BASE, CARD_VERSION
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 from .coordinator import SignalLightsCoordinator
 from .services import async_register_services, async_unregister_services
 from .store import SignalLightsStore
+from .websocket import async_register_websocket_commands
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -156,6 +157,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await async_register_services(hass)
+
+    # Register WebSocket commands once (guard with a sentinel in hass.data[DOMAIN_GLOBAL])
+    hass.data.setdefault(DOMAIN_GLOBAL, {})
+    if not hass.data[DOMAIN_GLOBAL].get("_ws_registered"):
+        async_register_websocket_commands(hass)
+        hass.data[DOMAIN_GLOBAL]["_ws_registered"] = True
 
     return True
 

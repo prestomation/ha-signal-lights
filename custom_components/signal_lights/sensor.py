@@ -59,7 +59,6 @@ class SignalLightsActiveSignalSensor(_SignalLightsSensorBase):
         """Initialise."""
         super().__init__(coordinator, entry)
         self._attr_unique_id = f"{entry.entry_id}_active_signal"
-        self._entry_id = entry.entry_id
 
     @property
     def native_value(self) -> str:
@@ -70,15 +69,12 @@ class SignalLightsActiveSignalSensor(_SignalLightsSensorBase):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return extra attributes including full config for the Lovelace card."""
+        """Return extra attributes for automations and other consumers."""
         if self.coordinator.data is None:
             return {}
         return {
-            "entry_id": self._entry_id,  # real config entry UUID for JS card
-            "active_signals": self.coordinator.data.get("active_signal_names", []),
-            "signals": self.coordinator.data.get("signals", []),
-            "lights": self.coordinator.data.get("lights", []),
-            "notifications": self.coordinator.data.get("notifications", {}),
+            # Key matches the WS payload key (active_signal_names) for consistency.
+            "active_signal_names": self.coordinator.data.get("active_signal_names", []),
         }
 
 

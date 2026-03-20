@@ -1,7 +1,10 @@
 /**
  * Signal Lights Card — Configuration and status dashboard for Home Assistant
  * Bundled with the Signal Lights integration — no manual setup required.
- * Version: 1.4.0
+ * Version: 2.0.0
+ *
+ * Data layer: uses custom WebSocket commands (signal_lights/subscribe,
+ * signal_lights/config) instead of scanning HA entity states.
  */
 
 /* ── Card picker registration ───────────────────────────────────────────── */
@@ -53,53 +56,183 @@ function _triggerDescription(signal) {
   }
 }
 
+/* ── Shared form builder helpers ────────────────────────────────────────── */
+
+/**
+ * Returns the HTML string for trigger-specific form fields.
+ * @param {string} mode - trigger_mode value
+ * @param {object} cfg - trigger_config object
+ * @param {object} signal - full signal object (for template value)
+ * @param {string} idPrefix - prefix for element IDs (e.g. 'sl-sig' or 'sl-edit-sig')
+ */
+function _buildTriggerFieldsHtml(mode, cfg, signal, idPrefix) {
+  switch (mode) {
+    case 'entity_equals':
+      return `
+        <div class="form-row">
+          <label>Entity</label>
+          <div id="${idPrefix}-entity-container" class="entity-picker-container"></div>
+        </div>
+        <div class="form-row">
+          <label>Target state</label>
+          <input type="text" id="${idPrefix}-state" value="${_esc(cfg.state || '')}" placeholder="on" />
+        </div>
+      `;
+    case 'entity_on':
+      return `
+        <div class="form-row">
+          <label>Entity</label>
+          <div id="${idPrefix}-entity-container" class="entity-picker-container"></div>
+        </div>
+      `;
+    case 'numeric_threshold':
+      return `
+        <div class="form-row">
+          <label>Sensor entity</label>
+          <div id="${idPrefix}-entity-container" class="entity-picker-container"></div>
+        </div>
+        <div class="form-row">
+          <label>Threshold</label>
+          <input type="number" id="${idPrefix}-threshold" value="${_esc(String(cfg.threshold !== undefined ? cfg.threshold : 0))}" />
+        </div>
+        <div class="form-row">
+          <label>Direction</label>
+          <select id="${idPrefix}-direction">
+            <option value="above" ${cfg.direction !== 'below' ? 'selected' : ''}>Above</option>
+            <option value="below" ${cfg.direction === 'below' ? 'selected' : ''}>Below</option>
+          </select>
+        </div>
+      `;
+    case 'template':
+    default:
+      return `
+        <div class="form-row">
+          <label>Jinja2 Template</label>
+          <textarea id="${idPrefix}-template" rows="3">${_esc((signal && (signal.template || (signal.trigger_config || {}).template)) || '')}</textarea>
+        </div>
+      `;
+  }
+}
+
+/**
+ * Reads trigger form values from the container and returns { triggerConfig, template }.
+ * @param {Element} container - DOM element containing the form fields
+ * @param {string} idPrefix - prefix for element IDs
+ * @param {string} mode - trigger_mode value
+ */
+function _readTriggerConfig(container, idPrefix, mode) {
+  let triggerConfig = {};
+  let template = '';
+
+  switch (mode) {
+    case 'entity_equals': {
+      const picker = container.querySelector(`#${idPrefix}-entity`);
+      const entityId = picker ? (picker.value || '').trim() : '';
+      const stateEl = container.querySelector(`#${idPrefix}-state`);
+      const state = stateEl ? stateEl.value.trim() : '';
+      triggerConfig = { entity_id: entityId, state };
+      break;
+    }
+    case 'entity_on': {
+      const picker = container.querySelector(`#${idPrefix}-entity`);
+      const entityId = picker ? (picker.value || '').trim() : '';
+      triggerConfig = { entity_id: entityId };
+      break;
+    }
+    case 'numeric_threshold': {
+      const picker = container.querySelector(`#${idPrefix}-entity`);
+      const entityId = picker ? (picker.value || '').trim() : '';
+      const threshEl = container.querySelector(`#${idPrefix}-threshold`);
+      const threshold = parseFloat((threshEl ? threshEl.value : null) || '0');
+      const dirEl = container.querySelector(`#${idPrefix}-direction`);
+      const direction = dirEl ? dirEl.value : 'above';
+      triggerConfig = { entity_id: entityId, threshold, direction };
+      break;
+    }
+    case 'template': {
+      const tmplEl = container.querySelector(`#${idPrefix}-template`);
+      template = tmplEl ? tmplEl.value.trim() : '';
+      triggerConfig = { template };
+      break;
+    }
+  }
+
+  return { triggerConfig, template };
+}
+
+/**
+ * Creates and injects a ha-entity-picker into the container placeholder.
+ * @param {Element} container - DOM element containing the form
+ * @param {string} idPrefix - prefix for element IDs
+ * @param {string} mode - trigger_mode (controls domain filter)
+ * @param {object} hass - HA hass object
+ * @param {string} currentValue - pre-populated entity ID
+ */
+function _injectEntityPicker(container, idPrefix, mode, hass, currentValue) {
+  const placeholder = container.querySelector(`#${idPrefix}-entity-container`);
+  if (!placeholder) return;
+
+  const picker = document.createElement('ha-entity-picker');
+  picker.hass = hass;
+  picker.allowCustomEntity = true;
+  picker.id = `${idPrefix}-entity`;
+
+  if (mode === 'entity_on') {
+    picker.includeDomains = ['binary_sensor', 'switch', 'light', 'input_boolean'];
+  } else if (mode === 'numeric_threshold') {
+    picker.includeDomains = ['sensor'];
+  }
+
+  picker.value = currentValue || '';
+  placeholder.appendChild(picker);
+}
+
 /* ── Editor element ─────────────────────────────────────────────────────── */
 class SignalLightsCardEditor extends HTMLElement {
   constructor() {
     super();
     this._config = {};
+    this.__hass = null;
   }
 
   setConfig(config) {
     this._config = { ...config };
-    if (this.__hass) this._render(); // re-render if hass is already available
+    if (this.__hass) this._render();
   }
 
   set hass(h) {
     const prev = this.__hass;
     this.__hass = h;
-    if (!this._config) return; // no config yet, wait for setConfig
-    if (prev) {
-      // Subsequent updates — only re-render if active_signal entities changed
-      const prevKeys = Object.keys(prev.states).filter(k => k.endsWith('_active_signal')).sort().join(',');
-      const newKeys = Object.keys(h.states).filter(k => k.endsWith('_active_signal')).sort().join(',');
-      if (prevKeys === newKeys) return;
-    }
-    this._render();
+    if (!this._config) return;
+    if (!prev && h) this._render(); // first hass set — trigger render
   }
 
-  /** Detect Signal Lights config entries by scanning _active_signal sensor entities. */
-  _detectEntries() {
+  /** Detect Signal Lights config entries via WebSocket. Returns a Promise. */
+  async _detectEntries() {
     if (!this.__hass) return [];
-    const states = this.__hass.states;
-    const seen = new Map(); // config entry UUID -> label
-    for (const eid of Object.keys(states)) {
-      if (eid.endsWith('_active_signal')) {
-        const attrs = states[eid].attributes || {};
-        // Use the real config entry UUID from the sensor's entry_id attribute
-        const entryId = attrs.entry_id;
-        if (!entryId) continue;
-        const label = attrs.friendly_name || eid;
-        seen.set(entryId, label);
-      }
+    try {
+      const entries = await this.__hass.callWS({ type: 'signal_lights/config' });
+      return entries.map(e => ({ eid: e.entry_id, label: e.title || e.entry_id }));
+    } catch (err) {
+      return [];
     }
-    const entries = Array.from(seen.entries()).map(([entryId, label]) => ({ eid: entryId, label }));
-    return entries;
   }
 
-  _render() {
+  async _render() {
+    // Guard against concurrent renders (e.g. hass set + setConfig racing).
+    if (this._rendering) return;
+    this._rendering = true;
+    try {
+      await this._renderInner();
+    } finally {
+      this._rendering = false;
+    }
+  }
+
+  async _renderInner() {
     if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
-    const entries = this._detectEntries();
+
+    const entries = await this._detectEntries();
     const showSelector = entries.length > 1;
     const currentEntry = this._config.config_entry_id || '';
 
@@ -175,7 +308,9 @@ class SignalLightsCard extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this._config = {};
     this._hass = null;
-    this._lastDataHash = null;
+    this._wsData = null;        // array of entry objects from WS subscription
+    this._wsUnsub = null;       // unsubscribe function from WS subscription
+    this._subscribing = false;  // guard flag to prevent double WS subscription race
     this._dragSrcIndex = null;
     this._showAddSignal = false;
     this._showAddLight = false;
@@ -184,6 +319,15 @@ class SignalLightsCard extends HTMLElement {
     this._editingSignal = null; // name of signal being edited (or null)
     this._editSignalMode = 'entity_equals'; // trigger_mode for the edit form
     this._timers = [];
+    // Data caches — populated from WS updates
+    this._signalsCache = null;
+    this._lightsCache = null;
+    this._notificationsCache = null;
+    this._activeSignal = 'none';
+    this._activeColor = '#000000';
+    this._activeSignalNames = [];
+    this._queueDepth = 0;
+    this._isActive = false;
   }
 
   static getConfigElement() {
@@ -200,20 +344,26 @@ class SignalLightsCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    const hash = this._dataHash();
-    if (hash !== this._lastDataHash) {
-      this._lastDataHash = hash;
-      // Don't re-render while a form is open — avoids wiping user input mid-edit.
-      // The next render after the form closes will use the fresh hash.
-      if (!this._showAddSignal && !this._showAddLight && !this._editingSignal) {
-        this._render();
-      }
+    // Subscribe when hass becomes available (lazy init).
+    // _subscribing guards against concurrent calls from set hass + connectedCallback.
+    if (!this._wsUnsub && !this._subscribing && hass) {
+      this._subscribeToUpdates();
+    }
+  }
+
+  async connectedCallback() {
+    if (this._hass && !this._wsUnsub && !this._subscribing) {
+      await this._subscribeToUpdates();
     }
   }
 
   disconnectedCallback() {
     for (const id of this._timers) clearTimeout(id);
     this._timers = [];
+    if (this._wsUnsub) {
+      this._wsUnsub();
+      this._wsUnsub = null;
+    }
   }
 
   _setTimeout(fn, delay) {
@@ -225,80 +375,78 @@ class SignalLightsCard extends HTMLElement {
     return id;
   }
 
-  /** Cache signal_lights entity IDs to avoid scanning all states on every update. */
-  _getRelevantEntityIds() {
-    const stateCount = Object.keys(this._hass.states).length;
-    if (this._relevantEids && this._relevantEidsAge === stateCount) {
-      return this._relevantEids;
+  /* ── WebSocket subscription ─────────────────────────────────────────── */
+
+  async _subscribeToUpdates() {
+    // Guard against concurrent calls from set hass + connectedCallback racing.
+    if (!this._hass || this._wsUnsub || this._subscribing) return;
+    this._subscribing = true;
+
+    const entryId = this._config.config_entry_id || null;
+    const msg = { type: 'signal_lights/subscribe' };
+    if (entryId) msg.entry_id = entryId;
+
+    try {
+      this._wsUnsub = await this._hass.connection.subscribeMessage(
+        (event) => {
+          this._wsData = event;
+          this._updateFromWsData();
+        },
+        msg
+      );
+    } catch (err) {
+      console.error('Signal Lights: WS subscribe failed:', err);
+    } finally {
+      this._subscribing = false;
     }
-    this._relevantEids = Object.keys(this._hass.states).filter(eid =>
-      (eid.startsWith('sensor.') && eid.includes('signal_lights')) ||
-      (eid.startsWith('binary_sensor.') && eid.includes('signal_lights'))
-    );
-    this._relevantEidsAge = stateCount;
-    return this._relevantEids;
   }
 
-  _dataHash() {
-    if (!this._hass) return '';
-    const states = this._hass.states;
-    const parts = [];
-    for (const eid of this._getRelevantEntityIds()) {
-      parts.push(eid + '=' + states[eid].state);
-      const attrs = states[eid].attributes;
-      if (attrs.active_signals) parts.push(JSON.stringify(attrs.active_signals));
+  _updateFromWsData() {
+    if (!this._wsData || this._wsData.length === 0) return;
+    const entry = this._getActiveEntry();
+    if (!entry) return;
+
+    // Detect structural changes that require a full DOM rebuild.
+    const signalsChanged = JSON.stringify(entry.signals) !== JSON.stringify(this._signalsCache);
+    const lightsChanged = JSON.stringify(entry.lights) !== JSON.stringify(this._lightsCache);
+    const notifChanged = JSON.stringify(entry.notifications) !== JSON.stringify(this._notificationsCache);
+
+    // Update all caches.
+    this._signalsCache = entry.signals;
+    this._lightsCache = entry.lights;
+    this._notificationsCache = entry.notifications;
+    this._activeSignal = entry.active_signal;
+    this._activeColor = entry.active_color;
+    this._activeSignalNames = entry.active_signal_names || [];
+    this._queueDepth = entry.queue_depth;
+    this._isActive = entry.is_active;
+
+    // Don't disrupt active editing forms.
+    if (this._editingSignal || this._showAddSignal || this._showAddLight) return;
+
+    if (signalsChanged || lightsChanged || notifChanged) {
+      // Structural change — full rebuild needed.
+      this._render();
+    } else {
+      // Status-only change (active_signal, active_color, queue_depth) —
+      // update the status bar in-place without destroying the DOM.
+      this._renderStatusBar();
     }
-    return parts.join('|');
   }
 
-  _getCoordData() {
-    // Get data from the active_signal sensor's attributes and coordinator data.
-    // Priority: 1) explicit "entity" in YAML config, 2) config_entry_id match, 3) first found
-    if (!this._hass) return null;
-    const states = this._hass.states;
-
-    // 1) Direct entity reference from YAML config (e.g. entity: sensor.signal_lights_active_signal)
-    const directEntity = this._config.entity;
-    if (directEntity && states[directEntity]) {
-      return states[directEntity];
+  _getActiveEntry() {
+    if (!this._wsData) return null;
+    const entryId = this._config.config_entry_id;  // set by editor dropdown
+    if (entryId) {
+      return this._wsData.find(e => e.entry_id === entryId) || this._wsData[0];
     }
-
-    // 2) Match by config_entry_id (from editor dropdown)
-    const configEntryId = this._config.config_entry_id || null;
-    let activeEntity = null;
-    for (const eid of Object.keys(states)) {
-      if (eid.endsWith('_active_signal')) {
-        const attrs = states[eid].attributes || {};
-        if (configEntryId) {
-          if (attrs.entry_id === configEntryId) {
-            activeEntity = states[eid];
-            break;
-          }
-        } else {
-          activeEntity = states[eid];
-          break;
-        }
-      }
-    }
-    return activeEntity;
+    return this._wsData[0];
   }
 
-  /** Return the config_entry_id to include in service calls (or empty object).
-   *  Only includes it when the value looks like a real HA config entry ULID. */
+  /** Return { config_entry_id } for service calls, or empty object. */
   _entryIdData() {
-    // Try explicit config_entry_id first
-    const id = this._config.config_entry_id;
-    if (id && /^[0-9A-Z]{26}$/.test(id)) {
-      return { config_entry_id: id };
-    }
-    // Fall back to reading entry_id from the resolved entity's attributes
-    const data = this._getCoordData();
-    if (data) {
-      const entryId = (data.attributes || {}).entry_id;
-      if (entryId && /^[0-9A-Z]{26}$/.test(entryId)) {
-        return { config_entry_id: entryId };
-      }
-    }
+    const entry = this._getActiveEntry();
+    if (entry) return { config_entry_id: entry.entry_id };
     return {};
   }
 
@@ -306,6 +454,7 @@ class SignalLightsCard extends HTMLElement {
     if (!this._hass) return;
     try {
       await this._hass.callService(domain, service, data);
+      // WS subscription will push the update automatically
     } catch (err) {
       console.error(`Signal Lights: ${domain}.${service} failed:`, err);
     }
@@ -317,44 +466,11 @@ class SignalLightsCard extends HTMLElement {
     const root = this.shadowRoot;
     const title = this._config.title || 'Signal Lights';
 
-    // Get current state
-    const activeEntity = this._getCoordData();
-    const activeSignal = activeEntity ? activeEntity.state : 'none';
-    const activeSignals = activeEntity ? (activeEntity.attributes.active_signals || []) : [];
-
-    // Get config data from sensor attributes (populated by coordinator)
-    // We'll fetch fresh data via service response pattern — but since services
-    // don't return data easily in cards, we use the sensor attributes.
-    // The coordinator pushes signals/lights/notifications into the data.
-
-    // For the card, we need to fetch from HA states. The coordinator data
-    // is available via sensor attributes. Let's check what we have.
-    let signals = [];
-    let lights = [];
-    let notifications = { enabled: false, targets: [] };
-
-    // Try to get full data from queue depth sensor (it has all data in coordinator)
-    // Actually, we need to get this from the REST API or use the sensor.
-    // For simplicity, the coordinator data is attached to the sensor.
-    // We'll look for extra attributes on the active signal sensor.
-    if (activeEntity && activeEntity.attributes) {
-      // These are set by the coordinator via _build_data
-      // But standard HA sensors may not expose all coordinator data as attributes.
-      // We'll use a fallback: call services and re-render.
-    }
-
-    // Build the card HTML
     root.innerHTML = `
       <style>${this._styles()}</style>
       <ha-card header="${_esc(title)}">
         <div class="card-content" id="sl-content">
-          <div class="status-bar">
-            <div class="status-indicator ${activeSignal !== 'none' ? 'active' : 'inactive'}">
-              <span class="status-dot" style="background: ${activeSignal !== 'none' ? 'var(--success-color, #4CAF50)' : 'var(--disabled-color, #9E9E9E)'}"></span>
-              <span class="status-text">${activeSignal !== 'none' ? _esc(activeSignal) : 'No active signal'}</span>
-            </div>
-            ${activeSignals.length > 1 ? `<span class="queue-badge">${activeSignals.length} in queue</span>` : ''}
-          </div>
+          <div id="sl-status-bar"></div>
 
           <div class="section" id="sl-lights-section">
             <div class="section-header">
@@ -384,39 +500,41 @@ class SignalLightsCard extends HTMLElement {
       </ha-card>
     `;
 
-    // Populate dynamic sections
+    this._renderStatusBar();
     this._renderLights();
-    this._renderSignals(activeSignals);
+    this._renderSignals();
     this._renderNotifications();
 
-    // Bind top-level events
     root.getElementById('sl-add-light-btn').addEventListener('click', () => this._toggleAddLight());
     root.getElementById('sl-add-signal-btn').addEventListener('click', () => this._toggleAddSignal());
   }
 
+  _renderStatusBar() {
+    const container = this.shadowRoot.getElementById('sl-status-bar');
+    if (!container) return;
+
+    const activeSignal = this._activeSignal || 'none';
+    const activeSignalNames = this._activeSignalNames || [];
+
+    container.innerHTML = `
+      <div class="status-bar">
+        <div class="status-indicator ${activeSignal !== 'none' ? 'active' : 'inactive'}">
+          <span class="status-dot" style="background: ${activeSignal !== 'none' ? 'var(--success-color, #4CAF50)' : 'var(--disabled-color, #9E9E9E)'}"></span>
+          <span class="status-text">${activeSignal !== 'none' ? _esc(activeSignal) : 'No active signal'}</span>
+        </div>
+        ${activeSignalNames.length > 1 ? `<span class="queue-badge">${activeSignalNames.length} in queue</span>` : ''}
+      </div>
+    `;
+  }
+
   _renderLights() {
     const container = this.shadowRoot.getElementById('sl-lights-list');
-    if (!container || !this._hass) return;
+    if (!container) return;
 
-    // Fetch lights from service call isn't practical in a card.
-    // Instead, we'll try to read from the HA storage via the coordinator.
-    // Workaround: use the REST API to read the storage, or just provide
-    // an "add light" form and let the user manage via the card.
-    // For now, show entities that have been registered by checking what
-    // entities the integration controls. We can detect this from the
-    // sensor attributes.
-
-    // Actually, let's just render an empty state with the add form.
-    // The data will come from re-reading after service calls.
-    // For a real deployment, the coordinator data is available.
-
-    // Simple approach: scan for light entities and show registered ones
-    // We'll store the known state in the card DOM after service calls.
     if (this._lightsCache) {
       this._renderLightsList(container, this._lightsCache);
     } else {
       container.innerHTML = '<div class="empty-state">Loading lights...</div>';
-      this._fetchConfig();
     }
   }
 
@@ -440,7 +558,6 @@ class SignalLightsCard extends HTMLElement {
         if (this._confirmDelete && this._confirmDelete.type === 'light' && this._confirmDelete.name === entityId) {
           this._callService('signal_lights', 'remove_light', { entity_id: entityId, ...this._entryIdData() }).then(() => {
             this._confirmDelete = null;
-            this._fetchConfig();
           });
         } else {
           this._confirmDelete = { type: 'light', name: entityId };
@@ -456,12 +573,12 @@ class SignalLightsCard extends HTMLElement {
     });
   }
 
-  _renderSignals(activeSignals) {
+  _renderSignals() {
     const container = this.shadowRoot.getElementById('sl-signals-list');
     if (!container) return;
 
     if (this._signalsCache) {
-      this._renderSignalsList(container, this._signalsCache, activeSignals);
+      this._renderSignalsList(container, this._signalsCache, this._activeSignalNames || []);
     } else {
       container.innerHTML = '<div class="empty-state">Loading signals...</div>';
     }
@@ -545,9 +662,7 @@ class SignalLightsCard extends HTMLElement {
           const names = this._signalsCache.map(s => s.name);
           const [moved] = names.splice(fromIndex, 1);
           names.splice(toIndex, 0, moved);
-          this._callService('signal_lights', 'reorder_signals', { order: names, ...this._entryIdData() }).then(() => {
-            this._fetchConfig();
-          });
+          this._callService('signal_lights', 'reorder_signals', { order: names, ...this._entryIdData() });
         }
         this._dragSrcIndex = null;
       });
@@ -570,15 +685,13 @@ class SignalLightsCard extends HTMLElement {
       btn.addEventListener('click', (e) => {
         const name = e.currentTarget.dataset.name;
         if (this._editingSignal === name) {
-          // Toggle off
           this._editingSignal = null;
         } else {
           const sig = signals.find(s => s.name === name);
           this._editingSignal = name;
           this._editSignalMode = sig ? (sig.trigger_mode || 'entity_equals') : 'entity_equals';
         }
-        // Re-render just the signals list
-        this._renderSignals(activeSignals);
+        this._renderSignals();
       });
     });
 
@@ -589,7 +702,6 @@ class SignalLightsCard extends HTMLElement {
           this._callService('signal_lights', 'remove_signal', { name, ...this._entryIdData() }).then(() => {
             this._confirmDelete = null;
             this._editingSignal = null;
-            this._fetchConfig();
           });
         } else {
           this._confirmDelete = { type: 'signal', name };
@@ -611,62 +723,12 @@ class SignalLightsCard extends HTMLElement {
     const mode = this._editSignalMode;
     const cfg = signal.trigger_config || {};
 
-    // Use preserved values from _editName/_editColor when re-rendering after mode change
     const editName = signal._editName !== undefined ? signal._editName : signal.name;
     const editColor = signal._editColor || signal.color || [255, 0, 0];
     const color = editColor;
     const hexColor = _rgbToHex(color);
 
-    let triggerFields = '';
-    switch (mode) {
-      case 'entity_equals':
-        triggerFields = `
-          <div class="form-row">
-            <label>Entity</label>
-            <div id="sl-edit-sig-entity-container" class="entity-picker-container"></div>
-          </div>
-          <div class="form-row">
-            <label>Target state</label>
-            <input type="text" id="sl-edit-sig-state" value="${_esc(cfg.state || '')}" placeholder="on" />
-          </div>
-        `;
-        break;
-      case 'entity_on':
-        triggerFields = `
-          <div class="form-row">
-            <label>Entity</label>
-            <div id="sl-edit-sig-entity-container" class="entity-picker-container"></div>
-          </div>
-        `;
-        break;
-      case 'numeric_threshold':
-        triggerFields = `
-          <div class="form-row">
-            <label>Sensor entity</label>
-            <div id="sl-edit-sig-entity-container" class="entity-picker-container"></div>
-          </div>
-          <div class="form-row">
-            <label>Threshold</label>
-            <input type="number" id="sl-edit-sig-threshold" value="${_esc(String(cfg.threshold !== undefined ? cfg.threshold : 0))}" />
-          </div>
-          <div class="form-row">
-            <label>Direction</label>
-            <select id="sl-edit-sig-direction">
-              <option value="above" ${cfg.direction !== 'below' ? 'selected' : ''}>Above</option>
-              <option value="below" ${cfg.direction === 'below' ? 'selected' : ''}>Below</option>
-            </select>
-          </div>
-        `;
-        break;
-      case 'template':
-        triggerFields = `
-          <div class="form-row">
-            <label>Jinja2 Template</label>
-            <textarea id="sl-edit-sig-template" rows="3">${_esc(signal.template || cfg.template || '')}</textarea>
-          </div>
-        `;
-        break;
-    }
+    const triggerFields = _buildTriggerFieldsHtml(mode, cfg, signal, 'sl-edit-sig');
 
     const isEvent = signal.trigger_type === 'event';
 
@@ -713,31 +775,14 @@ class SignalLightsCard extends HTMLElement {
       </div>
     `;
 
-    // Inject entity picker if needed
-    const entityContainer = container.querySelector('#sl-edit-sig-entity-container');
-    if (entityContainer) {
-      const entityPicker = document.createElement('ha-entity-picker');
-      entityPicker.hass = this._hass;
-      entityPicker.allowCustomEntity = true;
-      entityPicker.id = 'sl-edit-sig-entity';
-      if (mode === 'entity_on') {
-        entityPicker.includeDomains = ['binary_sensor', 'switch', 'light', 'input_boolean'];
-      } else if (mode === 'numeric_threshold') {
-        entityPicker.includeDomains = ['sensor'];
-      }
-      // Pre-populate the picker value
-      entityPicker.value = cfg.entity_id || '';
-      entityContainer.appendChild(entityPicker);
-    }
+    _injectEntityPicker(container, 'sl-edit-sig', mode, this._hass, cfg.entity_id || '');
 
-    // Trigger mode change — re-render form with new mode, preserving user edits
+    // Trigger mode change — re-render form with new mode, preserving edits
     container.querySelector('#sl-edit-sig-trigger-mode').addEventListener('change', (e) => {
       this._editSignalMode = e.target.value;
-      // Preserve current field values before re-rendering
       const updatedSignal = { ...signal };
       const nameEl = container.querySelector('#sl-edit-sig-name');
       if (nameEl) updatedSignal._editName = nameEl.value;
-      // Preserve color RGB values
       const rEl = container.querySelector('#sl-edit-sig-color-r');
       const gEl = container.querySelector('#sl-edit-sig-color-g');
       const bEl = container.querySelector('#sl-edit-sig-color-b');
@@ -785,37 +830,7 @@ class SignalLightsCard extends HTMLElement {
         ? parseInt(container.querySelector('#sl-edit-sig-duration').value || '60')
         : 0;
 
-      let newTriggerConfig = {};
-      let newTemplate = '';
-
-      switch (newTriggerMode) {
-        case 'entity_equals': {
-          const entityPicker = container.querySelector('#sl-edit-sig-entity');
-          const entityId = entityPicker ? (entityPicker.value || '').trim() : '';
-          const state = container.querySelector('#sl-edit-sig-state').value.trim();
-          newTriggerConfig = { entity_id: entityId, state };
-          break;
-        }
-        case 'entity_on': {
-          const entityPicker = container.querySelector('#sl-edit-sig-entity');
-          const entityId = entityPicker ? (entityPicker.value || '').trim() : '';
-          newTriggerConfig = { entity_id: entityId };
-          break;
-        }
-        case 'numeric_threshold': {
-          const entityPicker = container.querySelector('#sl-edit-sig-entity');
-          const entityId = entityPicker ? (entityPicker.value || '').trim() : '';
-          const threshold = parseFloat(container.querySelector('#sl-edit-sig-threshold').value || '0');
-          const direction = container.querySelector('#sl-edit-sig-direction').value;
-          newTriggerConfig = { entity_id: entityId, threshold, direction };
-          break;
-        }
-        case 'template': {
-          newTemplate = container.querySelector('#sl-edit-sig-template').value.trim();
-          newTriggerConfig = { template: newTemplate };
-          break;
-        }
-      }
+      const { triggerConfig: newTriggerConfig, template: newTemplate } = _readTriggerConfig(container, 'sl-edit-sig', newTriggerMode);
 
       const serviceData = {
         name: signal.name,
@@ -835,20 +850,14 @@ class SignalLightsCard extends HTMLElement {
 
       this._callService('signal_lights', 'update_signal', serviceData).then(() => {
         this._editingSignal = null;
-        this._fetchConfig();
+        // WS subscription will push the update
       });
     });
 
     // Cancel handler
     container.querySelector('#sl-edit-sig-cancel').addEventListener('click', () => {
       this._editingSignal = null;
-      // Re-render signals list without edit form
-      const sigContainer = this.shadowRoot.getElementById('sl-signals-list');
-      if (sigContainer && this._signalsCache) {
-        const activeEntity = this._getCoordData();
-        const activeSignals = activeEntity ? (activeEntity.attributes.active_signals || []) : [];
-        this._renderSignalsList(sigContainer, this._signalsCache, activeSignals);
-      }
+      this._renderSignals();
     });
   }
 
@@ -954,7 +963,6 @@ class SignalLightsCard extends HTMLElement {
         </div>
       `;
 
-      // Create HA entity picker programmatically
       const lightPicker = document.createElement('ha-entity-picker');
       lightPicker.hass = this._hass;
       lightPicker.includeDomains = ['light'];
@@ -977,7 +985,6 @@ class SignalLightsCard extends HTMLElement {
         }).then(() => {
           this._showAddLight = false;
           form.style.display = 'none';
-          this._fetchConfig();
         });
       });
 
@@ -1007,58 +1014,7 @@ class SignalLightsCard extends HTMLElement {
 
   _renderAddSignalForm(form) {
     const mode = this._addSignalMode;
-
-    // Use placeholder divs for entity pickers — we'll inject ha-entity-picker after innerHTML
-    let triggerFields = '';
-    switch (mode) {
-      case 'entity_equals':
-        triggerFields = `
-          <div class="form-row">
-            <label>Entity</label>
-            <div id="sl-sig-entity-container" class="entity-picker-container"></div>
-          </div>
-          <div class="form-row">
-            <label>Target state</label>
-            <input type="text" id="sl-sig-state" placeholder="on" />
-          </div>
-        `;
-        break;
-      case 'entity_on':
-        triggerFields = `
-          <div class="form-row">
-            <label>Entity</label>
-            <div id="sl-sig-entity-container" class="entity-picker-container"></div>
-          </div>
-        `;
-        break;
-      case 'numeric_threshold':
-        triggerFields = `
-          <div class="form-row">
-            <label>Sensor entity</label>
-            <div id="sl-sig-entity-container" class="entity-picker-container"></div>
-          </div>
-          <div class="form-row">
-            <label>Threshold</label>
-            <input type="number" id="sl-sig-threshold" placeholder="20" />
-          </div>
-          <div class="form-row">
-            <label>Direction</label>
-            <select id="sl-sig-direction">
-              <option value="above">Above</option>
-              <option value="below">Below</option>
-            </select>
-          </div>
-        `;
-        break;
-      case 'template':
-        triggerFields = `
-          <div class="form-row">
-            <label>Jinja2 Template</label>
-            <textarea id="sl-sig-template" rows="3" placeholder="{{ is_state('sensor.x', 'on') }}"></textarea>
-          </div>
-        `;
-        break;
-    }
+    const triggerFields = _buildTriggerFieldsHtml(mode, {}, null, 'sl-sig');
 
     form.innerHTML = `
       <div class="inline-form-inner">
@@ -1109,20 +1065,7 @@ class SignalLightsCard extends HTMLElement {
       this._renderAddSignalForm(form);
     });
 
-    // Inject ha-entity-picker into the placeholder container if present
-    const entityContainer = form.querySelector('#sl-sig-entity-container');
-    if (entityContainer) {
-      const entityPicker = document.createElement('ha-entity-picker');
-      entityPicker.hass = this._hass;
-      entityPicker.allowCustomEntity = true;
-      entityPicker.id = 'sl-sig-entity';
-      if (mode === 'entity_on') {
-        entityPicker.includeDomains = ['binary_sensor', 'switch', 'light', 'input_boolean'];
-      } else if (mode === 'numeric_threshold') {
-        entityPicker.includeDomains = ['sensor'];
-      }
-      entityContainer.appendChild(entityPicker);
-    }
+    _injectEntityPicker(form, 'sl-sig', mode, this._hass, '');
 
     // Show duration for event type
     const typeSelect = form.querySelector('#sl-sig-trigger-type');
@@ -1156,34 +1099,7 @@ class SignalLightsCard extends HTMLElement {
       const triggerMode = this._addSignalMode;
       const duration = triggerType === 'event' ? parseInt(form.querySelector('#sl-sig-duration').value || '60') : 0;
 
-      let triggerConfig = {};
-      let template = '';
-
-      switch (triggerMode) {
-        case 'entity_equals': {
-          const entityId = (form.querySelector('#sl-sig-entity').value || '').trim();
-          const state = form.querySelector('#sl-sig-state').value.trim();
-          triggerConfig = { entity_id: entityId, state };
-          break;
-        }
-        case 'entity_on': {
-          const entityId = (form.querySelector('#sl-sig-entity').value || '').trim();
-          triggerConfig = { entity_id: entityId };
-          break;
-        }
-        case 'numeric_threshold': {
-          const entityId = (form.querySelector('#sl-sig-entity').value || '').trim();
-          const threshold = parseFloat(form.querySelector('#sl-sig-threshold').value || '0');
-          const direction = form.querySelector('#sl-sig-direction').value;
-          triggerConfig = { entity_id: entityId, threshold, direction };
-          break;
-        }
-        case 'template': {
-          template = form.querySelector('#sl-sig-template').value.trim();
-          triggerConfig = { template };
-          break;
-        }
-      }
+      const { triggerConfig, template } = _readTriggerConfig(form, 'sl-sig', triggerMode);
 
       this._callService('signal_lights', 'add_signal', {
         name,
@@ -1197,7 +1113,6 @@ class SignalLightsCard extends HTMLElement {
       }).then(() => {
         this._showAddSignal = false;
         form.style.display = 'none';
-        this._fetchConfig();
       });
     });
 
@@ -1205,32 +1120,6 @@ class SignalLightsCard extends HTMLElement {
       this._showAddSignal = false;
       form.style.display = 'none';
     });
-  }
-
-  /* ── Fetch config from HA ──────────────────────────────────────────── */
-
-  async _fetchConfig() {
-    if (!this._hass) return;
-
-    // The coordinator already pushes data via sensor attributes after every mutating
-    // service call — no need to call refresh here. Just wait briefly for HA to propagate
-    // the updated state, then read from hass.states directly.
-    await new Promise(r => setTimeout(r, 200));
-
-    const activeEntity = this._getCoordData();
-    if (activeEntity && activeEntity.attributes) {
-      if (activeEntity.attributes.signals) {
-        this._signalsCache = activeEntity.attributes.signals;
-      }
-      if (activeEntity.attributes.lights) {
-        this._lightsCache = activeEntity.attributes.lights;
-      }
-      if (activeEntity.attributes.notifications) {
-        this._notificationsCache = activeEntity.attributes.notifications;
-      }
-    }
-
-    this._render();
   }
 
   /* ── Styles ────────────────────────────────────────────────────────── */
