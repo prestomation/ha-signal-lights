@@ -219,6 +219,17 @@ class SignalLightsCardEditor extends HTMLElement {
   }
 
   async _render() {
+    // Guard against concurrent renders (e.g. hass set + setConfig racing).
+    if (this._rendering) return;
+    this._rendering = true;
+    try {
+      await this._renderInner();
+    } finally {
+      this._rendering = false;
+    }
+  }
+
+  async _renderInner() {
     if (!this.shadowRoot) this.attachShadow({ mode: 'open' });
 
     const entries = await this._detectEntries();
@@ -299,6 +310,7 @@ class SignalLightsCard extends HTMLElement {
     this._hass = null;
     this._wsData = null;        // array of entry objects from WS subscription
     this._wsUnsub = null;       // unsubscribe function from WS subscription
+    this._subscribing = false;  // guard flag to prevent double WS subscription race
     this._dragSrcIndex = null;
     this._showAddSignal = false;
     this._showAddLight = false;
@@ -332,14 +344,15 @@ class SignalLightsCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    // Subscribe when hass becomes available (lazy init)
-    if (!this._wsUnsub && hass) {
+    // Subscribe when hass becomes available (lazy init).
+    // _subscribing guards against concurrent calls from set hass + connectedCallback.
+    if (!this._wsUnsub && !this._subscribing && hass) {
       this._subscribeToUpdates();
     }
   }
 
   async connectedCallback() {
-    if (this._hass && !this._wsUnsub) {
+    if (this._hass && !this._wsUnsub && !this._subscribing) {
       await this._subscribeToUpdates();
     }
   }
@@ -365,7 +378,9 @@ class SignalLightsCard extends HTMLElement {
   /* ── WebSocket subscription ─────────────────────────────────────────── */
 
   async _subscribeToUpdates() {
-    if (!this._hass || this._wsUnsub) return;
+    // Guard against concurrent calls from set hass + connectedCallback racing.
+    if (!this._hass || this._wsUnsub || this._subscribing) return;
+    this._subscribing = true;
 
     const entryId = this._config.config_entry_id || null;
     const msg = { type: 'signal_lights/subscribe' };
@@ -380,7 +395,9 @@ class SignalLightsCard extends HTMLElement {
         msg
       );
     } catch (err) {
-      console.error('Signal Lights: WebSocket subscribe failed:', err);
+      console.error('Signal Lights: WS subscribe failed:', err);
+    } finally {
+      this._subscribing = false;
     }
   }
 
@@ -389,24 +406,37 @@ class SignalLightsCard extends HTMLElement {
     const entry = this._getActiveEntry();
     if (!entry) return;
 
+    // Detect structural changes that require a full DOM rebuild.
+    const signalsChanged = JSON.stringify(entry.signals) !== JSON.stringify(this._signalsCache);
+    const lightsChanged = JSON.stringify(entry.lights) !== JSON.stringify(this._lightsCache);
+    const notifChanged = JSON.stringify(entry.notifications) !== JSON.stringify(this._notificationsCache);
+
+    // Update all caches.
     this._signalsCache = entry.signals;
     this._lightsCache = entry.lights;
     this._notificationsCache = entry.notifications;
     this._activeSignal = entry.active_signal;
     this._activeColor = entry.active_color;
-    this._activeSignalNames = entry.active_signal_names;
+    this._activeSignalNames = entry.active_signal_names || [];
     this._queueDepth = entry.queue_depth;
     this._isActive = entry.is_active;
 
-    // Only re-render if not in the middle of editing
-    if (!this._editingSignal && !this._showAddSignal && !this._showAddLight) {
+    // Don't disrupt active editing forms.
+    if (this._editingSignal || this._showAddSignal || this._showAddLight) return;
+
+    if (signalsChanged || lightsChanged || notifChanged) {
+      // Structural change — full rebuild needed.
       this._render();
+    } else {
+      // Status-only change (active_signal, active_color, queue_depth) —
+      // update the status bar in-place without destroying the DOM.
+      this._renderStatusBar();
     }
   }
 
   _getActiveEntry() {
     if (!this._wsData) return null;
-    const entryId = this._config.config_entry_id || this._config.entity_entry_id;
+    const entryId = this._config.config_entry_id;  // set by editor dropdown
     if (entryId) {
       return this._wsData.find(e => e.entry_id === entryId) || this._wsData[0];
     }

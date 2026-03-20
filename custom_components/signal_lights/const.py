@@ -3,6 +3,10 @@
 import re
 
 DOMAIN = "signal_lights"
+# Separate key for integration-global state (WS sentinel, locks).
+# hass.data[DOMAIN] holds only coordinator objects keyed by entry_id.
+# hass.data[DOMAIN_GLOBAL] holds non-coordinator global sentinels.
+DOMAIN_GLOBAL = f"{DOMAIN}_global"
 PLATFORMS = ["sensor", "binary_sensor"]
 STORAGE_KEY = "signal_lights"  # base key; per-entry key is signal_lights_{entry_id}
 STORAGE_VERSION = 1

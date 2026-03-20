@@ -73,7 +73,8 @@ class SignalLightsActiveSignalSensor(_SignalLightsSensorBase):
         if self.coordinator.data is None:
             return {}
         return {
-            "active_signals": self.coordinator.data.get("active_signal_names", []),
+            # Key matches the WS payload key (active_signal_names) for consistency.
+            "active_signal_names": self.coordinator.data.get("active_signal_names", []),
         }
 
 

@@ -11,7 +11,7 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
-from .const import DOMAIN, NOTIFY_TARGET_RE
+from .const import DOMAIN, DOMAIN_GLOBAL, NOTIFY_TARGET_RE
 from .coordinator import SignalLightsCoordinator
 from .engine import generate_template_from_trigger, validate_trigger_config
 
@@ -220,12 +220,10 @@ def _get_coordinator(
     - If entry_id is None and multiple entries exist, log a warning and return None.
     - If no entries exist, return None (caller logs if needed).
     """
+    # hass.data[DOMAIN] contains only coordinator objects keyed by entry_id.
+    # Global sentinels live in hass.data[DOMAIN_GLOBAL] — no isinstance filter needed.
     domain_data = hass.data.get(DOMAIN, {})
-    coords = {
-        eid: c
-        for eid, c in domain_data.items()
-        if isinstance(c, SignalLightsCoordinator)
-    }
+    coords = dict(domain_data)
 
     if not coords:
         return None
@@ -262,9 +260,7 @@ def _resolve_coordinator(
         # Only log for the zero-coordinators case — other cases already logged
         # by _get_coordinator (not-found, multiple setups).
         domain_data = hass.data.get(DOMAIN, {})
-        has_any = any(
-            isinstance(c, SignalLightsCoordinator) for c in domain_data.values()
-        )
+        has_any = bool(domain_data)
         if not has_any:
             _LOGGER.warning(
                 "Signal Lights: no active coordinator — ignoring service call"
@@ -278,7 +274,7 @@ def _find_light_conflict(
     """Return (entry_id, title) of another setup that already owns entity_id, or None."""
     domain_data = hass.data.get(DOMAIN, {})
     for eid, other in domain_data.items():
-        if isinstance(other, SignalLightsCoordinator) and other is not skip_coord:
+        if other is not skip_coord:
             if any(light["entity_id"] == entity_id for light in other.store.get_lights()):
                 return eid, other.entry_title
     return None
@@ -289,9 +285,10 @@ async def async_register_services(hass: HomeAssistant) -> None:
     if hass.services.has_service(DOMAIN, "trigger_signal"):
         return  # already registered
 
-    # Domain-level lock for add_light to prevent cross-entry race conditions
-    hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN].setdefault("add_light_lock", asyncio.Lock())
+    # Domain-level lock for add_light to prevent cross-entry race conditions.
+    # Stored in DOMAIN_GLOBAL to keep hass.data[DOMAIN] clean (coordinators only).
+    hass.data.setdefault(DOMAIN_GLOBAL, {})
+    hass.data[DOMAIN_GLOBAL].setdefault("add_light_lock", asyncio.Lock())
 
     async def handle_trigger_signal(call: ServiceCall) -> None:
         """Handle signal_lights.trigger_signal."""
@@ -347,7 +344,7 @@ async def async_register_services(hass: HomeAssistant) -> None:
         if coord is None:
             return
 
-        async with hass.data[DOMAIN]["add_light_lock"]:
+        async with hass.data[DOMAIN_GLOBAL]["add_light_lock"]:
             # Enforce count limit
             current_lights = coord.store.get_lights()
             if len(current_lights) >= MAX_LIGHTS:
