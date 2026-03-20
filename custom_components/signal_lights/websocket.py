@@ -113,7 +113,12 @@ def ws_subscribe_updates(hass, connection, msg):
     domain_data = hass.data.get(DOMAIN, {})
 
     # Send initial state
-    connection.send_result(msg["id"], _build_entry_snapshots(domain_data, entry_id_filter))
+    # send_result confirms the subscription to HA's subscribeMessage() JS client.
+    # Then immediately send an event_message with the initial data snapshot,
+    # because subscribeMessage() only fires the callback on event_messages, not on the result.
+    initial_data = _build_entry_snapshots(domain_data, entry_id_filter)
+    connection.send_result(msg["id"])
+    connection.send_message(websocket_api.event_message(msg["id"], initial_data))
 
     # Subscribe to coordinator updates
     unsubs = []

@@ -357,11 +357,15 @@ class SignalLightsCard extends HTMLElement {
   }
 
   set hass(hass) {
+    const first = !this._hass;
     this._hass = hass;
     // Subscribe when hass becomes available (lazy init).
-    // _subscribing guards against concurrent calls from set hass + connectedCallback.
     if (!this._wsUnsub && !this._subscribing && hass) {
       this._subscribeToUpdates();
+    }
+    // Show loading spinner immediately on first hass set
+    if (first && hass && this._config && !this._wsData) {
+      this._render();
     }
   }
 
