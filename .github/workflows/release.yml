@@ -21,22 +21,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install test dependencies
-        run: pip install pytest pytest-timeout requests
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
       - name: Start Home Assistant
         working-directory: tests/integration
         run: docker compose up -d
       - name: Wait for Home Assistant
-        run: |
-          for i in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8123/api/ 2>/dev/null || true)
-            if [ "$code" = "200" ] || [ "$code" = "401" ]; then exit 0; fi
-            sleep 2
-          done
-          exit 1
+        run: bash scripts/wait-for-ha.sh
       - name: Run integration tests
         working-directory: tests/integration
-        run: pytest test_lifecycle.py -v --timeout=300
+        run: python -m pytest . -v --tb=short --timeout=300
       - name: HA logs on failure
         if: failure()
         working-directory: tests/integration
@@ -57,6 +51,11 @@ jobs:
           ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Extract version from tag
         id: version
         run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
@@ -64,36 +63,16 @@ jobs:
       - name: Bump version in manifest
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          python3 -c "
-          import json, os
-          version = os.environ['VERSION']
-          with open('custom_components/signal_lights/manifest.json') as f:
-              data = json.load(f)
-          data['version'] = version
-          with open('custom_components/signal_lights/manifest.json', 'w') as f:
-              json.dump(data, f, indent=2)
-              f.write('\n')
-          "
+        run: python scripts/bump-version.py $VERSION
 
       - name: Commit version bump
-        run: |
-          VERSION=${{ steps.version.outputs.version }}
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add custom_components/signal_lights/manifest.json
-          if git diff --cached --quiet; then
-            echo "Version already up to date"
-          else
-            git commit -m "Bump version to ${VERSION} [skip ci]"
-            git push origin main
-          fi
+        run: bash scripts/commit-version-bump.sh ${{ steps.version.outputs.version }}
 
       - name: Extract changelog for this version
         id: changelog
         run: |
           VERSION=${{ steps.version.outputs.version }}
-          awk "/^## \\[$VERSION\\]/,/^## \\[/{if(/^## \\[$VERSION\\]/)found=1; else if(/^## \\[/ && found)exit; if(found)print}" CHANGELOG.md > release_notes.txt
+          bash scripts/extract-changelog.sh $VERSION > release_notes.txt
           if [ ! -s release_notes.txt ]; then
             echo "Release v${VERSION}" > release_notes.txt
           fi

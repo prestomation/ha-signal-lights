@@ -55,3 +55,20 @@ tests/
 - Minimum version: 2024.1
 - IoT class: local_push
 - No external dependencies
+
+## Testing
+
+Run all checks before pushing:
+
+```bash
+# Python unit tests
+python -m pytest tests/test_engine.py -v
+
+# JS unit tests
+npm test
+
+# Compile check
+find custom_components -name "*.py" -exec python -m py_compile {} +
+```
+
+See CONTRIBUTING.md for full details including integration tests.
