@@ -82,8 +82,16 @@ jobs:
 
       - name: Build release zip
         run: |
+          if [ ! -d "custom_components/signal_lights" ]; then
+            echo "Error: custom_components/signal_lights directory not found"
+            exit 1
+          fi
           cd custom_components/signal_lights
-          zip -r ../../signal_lights.zip . -x "*/__pycache__/*" "*/__pycache__" "__pycache__/*" "__pycache__" "*.pyc"
+          zip -r ../../signal_lights.zip . -x "*__pycache__*" "*.pyc"
+          if [ ! -f "../../signal_lights.zip" ]; then
+            echo "Error: Failed to create signal_lights.zip"
+            exit 1
+          fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
