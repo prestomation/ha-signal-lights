@@ -1,7 +1,8 @@
 # Signal Lights
 
-[![GitHub Release](https://img.shields.io/github/v/release/prestomation/ha-signal-lights?style=flat-square)](https://github.com/prestomation/ha-signal-lights/releases)
-[![GitHub Downloads](https://img.shields.io/github/downloads/prestomation/ha-signal-lights/total?style=flat-square&label=downloads)](https://github.com/prestomation/ha-signal-lights/releases)
+[![GitHub Release](https://img.shields.io/github/v/release/prestomation/ha-signal-lights?style=for-the-badge)](https://github.com/prestomation/ha-signal-lights/releases)
+[![GitHub Downloads](https://img.shields.io/github/downloads/prestomation/ha-signal-lights/total.svg?style=for-the-badge)](https://github.com/prestomation/ha-signal-lights/releases)
+[![GitHub Latest Downloads](https://img.shields.io/github/downloads-pre/prestomation/ha-signal-lights/latest/total?style=for-the-badge)](https://github.com/prestomation/ha-signal-lights/releases)
 [![HACS Validation](https://github.com/prestomation/ha-signal-lights/actions/workflows/hacs.yml/badge.svg)](https://github.com/prestomation/ha-signal-lights/actions/workflows/hacs.yml)
 [![Validate](https://github.com/prestomation/ha-signal-lights/actions/workflows/lint.yml/badge.svg)](https://github.com/prestomation/ha-signal-lights/actions/workflows/lint.yml)
 [![Tests](https://github.com/prestomation/ha-signal-lights/actions/workflows/integration.yml/badge.svg)](https://github.com/prestomation/ha-signal-lights/actions/workflows/integration.yml)
