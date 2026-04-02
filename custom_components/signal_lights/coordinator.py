@@ -329,7 +329,8 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> None:
         """Send or update persistent notification and mobile targets."""
         if len(all_signal_names) > 1:
-            message = "\n".join(all_signal_names)
+            others = [n for n in all_signal_names if n != signal_name]
+            message = f"{signal_name}\nAlso active: {', '.join(others)}"
         else:
             message = signal_name
 
