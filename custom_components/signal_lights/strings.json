@@ -111,6 +111,13 @@
           "enabled": "Enable notifications",
           "targets": "Mobile notify targets (comma-separated, e.g., notify.mobile_app_phone)"
         }
+      },
+      "configure_cycling": {
+        "title": "Configure Signal Cycling",
+        "description": "When multiple signals are active for the same light, the light can cycle through all active signals in priority order.\n\nSet **Cycle interval** to the number of seconds each signal is shown before switching. Set to **0** to disable cycling (highest priority signal always wins).",
+        "data": {
+          "cycle_interval_seconds": "Cycle interval (seconds)"
+        }
       }
     },
     "error": {

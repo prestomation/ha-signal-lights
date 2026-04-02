@@ -15,3 +15,7 @@ CARD_VERSION = "2.0.0"
 
 # Restrict notification targets to the notify.* domain
 NOTIFY_TARGET_RE = re.compile(r'^notify\.[a-z0-9_]+$')
+
+# Signal cycling configuration
+CONF_CYCLE_INTERVAL = "cycle_interval_seconds"
+DEFAULT_CYCLE_INTERVAL = 0

@@ -308,3 +308,28 @@ configure_notifications:
       required: false
       selector:
         text:
+
+set_cycle_interval:
+  name: Set Cycle Interval
+  description: >
+    Set the signal cycling interval. When 2+ signals are active and the interval
+    is greater than 0, the light cycles through all active signals in priority order,
+    showing each one for the given number of seconds. Set to 0 to disable cycling
+    (highest priority signal always wins).
+  fields:
+    cycle_interval_seconds:
+      name: Cycle Interval (seconds)
+      description: "Seconds to show each signal when cycling. 0 = disabled."
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 300
+          mode: box
+          unit_of_measurement: seconds
+    config_entry_id:
+      name: Setup (config entry ID)
+      description: Target Signal Lights setup. Optional when only one setup exists.
+      required: false
+      selector:
+        text:

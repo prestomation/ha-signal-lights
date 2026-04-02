@@ -259,6 +259,11 @@ class SignalLightsCardEditor extends HTMLElement {
       `;
     }
 
+    const cycleEnabled = this._config.cycle_interval_seconds > 0;
+    const dwellSeconds = this._config.cycle_interval_seconds > 0
+      ? this._config.cycle_interval_seconds
+      : 5;
+
     this.shadowRoot.innerHTML = `
       <style>
         .form { display: flex; flex-direction: column; gap: 12px; padding: 8px 0; }
@@ -269,6 +274,8 @@ class SignalLightsCardEditor extends HTMLElement {
           background: var(--card-background-color); color: var(--primary-text-color); font-size: 14px;
         }
         .hint { font-size: 11px; color: var(--secondary-text-color); margin-top: 2px; }
+        .toggle-row { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+        .toggle-row input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; margin: 0; }
       </style>
       <div class="form">
         <div>
@@ -277,11 +284,28 @@ class SignalLightsCardEditor extends HTMLElement {
         </div>
         ${selectorHtml}
         <div class="hint">${showSelector ? 'Multiple Signal Lights setups detected. Select which one to display.' : ''}</div>
+        <div class="toggle-row">
+          <label style="margin:0">Cycle between signals when multiple are active</label>
+          <input type="checkbox" name="cycle_enabled" ${cycleEnabled ? 'checked' : ''} />
+        </div>
+        <div id="sl-editor-dwell-row" style="display:${cycleEnabled ? 'block' : 'none'}">
+          <label>Dwell time (seconds per signal, 1–300)</label>
+          <input type="number" name="cycle_interval_seconds" min="1" max="300" value="${dwellSeconds}" />
+        </div>
       </div>
     `;
     this.shadowRoot.querySelectorAll('input, select').forEach(el => {
       el.addEventListener('change', () => this._valueChanged());
     });
+    // Show/hide dwell row based on toggle
+    const cycleCheckbox = this.shadowRoot.querySelector('input[name="cycle_enabled"]');
+    const dwellRow = this.shadowRoot.getElementById('sl-editor-dwell-row');
+    if (cycleCheckbox && dwellRow) {
+      cycleCheckbox.addEventListener('change', () => {
+        dwellRow.style.display = cycleCheckbox.checked ? 'block' : 'none';
+        this._valueChanged();
+      });
+    }
   }
 
   _valueChanged() {
@@ -300,9 +324,29 @@ class SignalLightsCardEditor extends HTMLElement {
         delete newConfig.config_entry_id;
       }
     }
+    // Cycle settings: toggle + dwell time — stored in card config for persistence
+    const cycleCheckbox = this.shadowRoot.querySelector('input[name="cycle_enabled"]');
+    const dwellEl = this.shadowRoot.querySelector('input[name="cycle_interval_seconds"]');
+    if (cycleCheckbox) {
+      if (cycleCheckbox.checked && dwellEl) {
+        const dwell = Math.max(1, Math.min(300, parseInt(dwellEl.value) || 5));
+        newConfig.cycle_interval_seconds = dwell;
+      } else {
+        newConfig.cycle_interval_seconds = 0;
+      }
+    }
     this.dispatchEvent(new CustomEvent('config-changed', {
       detail: { config: newConfig }, bubbles: true, composed: true,
     }));
+    // Immediately apply cycle interval to the integration via service call
+    if (cycleCheckbox && this.__hass) {
+      const dwell = cycleCheckbox.checked && dwellEl
+        ? Math.max(1, Math.min(300, parseInt(dwellEl.value) || 5))
+        : 0;
+      const serviceData = { cycle_interval_seconds: dwell };
+      if (newConfig.config_entry_id) serviceData.config_entry_id = newConfig.config_entry_id;
+      this.__hass.callService('signal_lights', 'set_cycle_interval', serviceData).catch(() => {});
+    }
   }
 }
 
@@ -336,6 +380,8 @@ class SignalLightsCard extends HTMLElement {
     this._activeSignalNames = [];
     this._queueDepth = 0;
     this._isActive = false;
+    this._cycleInterval = 0;
+    this._cycleIndex = 0;
   }
 
   static getConfigElement() {
@@ -469,6 +515,8 @@ class SignalLightsCard extends HTMLElement {
     this._activeSignalNames = entry.active_signal_names || [];
     this._queueDepth = entry.queue_depth;
     this._isActive = entry.is_active;
+    this._cycleInterval = entry.cycle_interval || 0;
+    this._cycleIndex = entry.cycle_index || 0;
 
     // Don't disrupt active editing forms.
     if (this._editingSignal || this._showAddSignal || this._showAddLight) return;
@@ -613,12 +661,15 @@ class SignalLightsCard extends HTMLElement {
 
     const activeSignal = this._activeSignal || 'none';
     const activeSignalNames = this._activeSignalNames || [];
+    const cycleInterval = this._cycleInterval || 0;
+    const isCycling = cycleInterval > 0 && activeSignalNames.length > 1;
 
     container.innerHTML = `
       <div class="status-bar">
         <div class="status-indicator ${activeSignal !== 'none' ? 'active' : 'inactive'}">
           <span class="status-dot" style="background: ${activeSignal !== 'none' ? _esc(this._activeColor || '#4CAF50') : 'var(--disabled-color, #9E9E9E)'}"></span>
           <span class="status-text">${activeSignal !== 'none' ? _esc(activeSignal) : 'No active signal'}</span>
+          ${isCycling ? `<span class="cycle-badge" title="Cycling every ${cycleInterval}s">↻</span>` : ''}
         </div>
         ${activeSignalNames.length > 1 ? `<span class="queue-badge">${activeSignalNames.length} in queue</span>` : ''}
       </div>
@@ -1264,6 +1315,17 @@ class SignalLightsCard extends HTMLElement {
         border-radius: 10px;
         background: var(--primary-color, #03A9F4);
         color: var(--text-primary-color, #fff);
+      }
+      .cycle-badge {
+        font-size: 13px;
+        color: var(--primary-color, #03A9F4);
+        margin-left: 2px;
+        animation: sl-cycle-spin 2s linear infinite;
+        display: inline-block;
+      }
+      @keyframes sl-cycle-spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
       }
 
       .section {

@@ -9,11 +9,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import timedelta
-from typing import Any
+from typing import Any, Callable
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.event import async_track_template_result, TrackTemplate
+from homeassistant.helpers.event import async_call_later, async_track_template_result, TrackTemplate
 from homeassistant.helpers.template import Template
 try:
     from homeassistant.helpers.device_registry import DeviceInfo
@@ -21,7 +21,7 @@ except ImportError:
     from homeassistant.helpers.entity import DeviceInfo  # type: ignore[no-redef]
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import DOMAIN, NOTIFY_TARGET_RE
+from .const import DOMAIN, NOTIFY_TARGET_RE, CONF_CYCLE_INTERVAL, DEFAULT_CYCLE_INTERVAL
 from .engine import Signal, LightConfig, SignalEngine
 from .store import SignalLightsStore
 
@@ -56,6 +56,9 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._flush_lock = asyncio.Lock()
         # Per-entry notification tag prevents cross-entry notification collisions
         self._notification_tag = f"signal_lights_{entry.entry_id}"
+        # Signal cycling state
+        self._cycle_index: int = 0
+        self._cycle_cancel: Callable | None = None
 
     async def async_setup(self) -> None:
         """Set up the engine from stored configuration and start template tracking."""
@@ -163,33 +166,118 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._apply_notifications()
             self.async_set_updated_data(self._build_data())
 
+    def _get_cycle_interval(self) -> int:
+        """Return the configured cycle interval in seconds (0 = disabled)."""
+        return int(
+            self._entry.options.get(CONF_CYCLE_INTERVAL, DEFAULT_CYCLE_INTERVAL)
+        )
+
+    def _cancel_cycle_timer(self) -> None:
+        """Cancel any running cycle timer."""
+        if self._cycle_cancel is not None:
+            self._cycle_cancel()
+            self._cycle_cancel = None
+
+    @callback
+    def _cycle_tick(self, _now: Any) -> None:
+        """Advance the cycle index and re-apply lights."""
+        self._cycle_cancel = None  # timer has fired; clear reference
+        active_signals = self.engine.get_active_signals()
+        if len(active_signals) >= 2 and self._get_cycle_interval() > 0:
+            self._cycle_index = (self._cycle_index + 1) % len(active_signals)
+            # Schedule the next tick before the flush so the timer is always set
+            self._cycle_cancel = async_call_later(
+                self.hass, self._get_cycle_interval(), self._cycle_tick
+            )
+        else:
+            self._cycle_index = 0
+        self.hass.async_create_task(self._flush())
+
     async def _apply_light_states(self) -> None:
-        """Push the current signal evaluation to physical lights."""
-        states = self.engine.evaluate()
-        for entity_id, state in states.items():
-            try:
-                if state is None:
-                    await self.hass.services.async_call(
-                        "light",
-                        "turn_off",
-                        {"entity_id": entity_id},
-                        blocking=False,
-                    )
-                else:
-                    await self.hass.services.async_call(
-                        "light",
-                        "turn_on",
-                        {
-                            "entity_id": entity_id,
-                            "rgb_color": list(state["rgb_color"]),
-                            "brightness": state["brightness"],
-                        },
-                        blocking=False,
-                    )
-            except Exception:  # noqa: BLE001
-                _LOGGER.warning(
-                    "Signal Lights: failed to control light %s", entity_id
+        """Push the current signal evaluation to physical lights.
+
+        When cycling is active (cycle_interval > 0 and 2+ signals active),
+        overrides the per-light winner with the currently displayed cycle signal.
+        """
+        active_signals = self.engine.get_active_signals()
+        cycle_interval = self._get_cycle_interval()
+
+        if cycle_interval > 0 and len(active_signals) >= 2:
+            # Cycling mode: ensure timer is running
+            if self._cycle_cancel is None:
+                self._cycle_cancel = async_call_later(
+                    self.hass, cycle_interval, self._cycle_tick
                 )
+            # Clamp index in case signals were removed
+            self._cycle_index = self._cycle_index % len(active_signals)
+            cycle_signal = active_signals[self._cycle_index].signal
+
+            # Build light states using the cycling signal, respecting light_filter
+            for light in self.engine.lights:
+                try:
+                    if cycle_signal.applies_to_light(light.entity_id):
+                        await self.hass.services.async_call(
+                            "light",
+                            "turn_on",
+                            {
+                                "entity_id": light.entity_id,
+                                "rgb_color": list(cycle_signal.color),
+                                "brightness": light.brightness,
+                            },
+                            blocking=False,
+                        )
+                    else:
+                        # Light not in this signal's filter — use normal evaluation
+                        winner = self.engine.get_winning_signal_for_light(light.entity_id)
+                        if winner is None:
+                            await self.hass.services.async_call(
+                                "light", "turn_off",
+                                {"entity_id": light.entity_id},
+                                blocking=False,
+                            )
+                        else:
+                            await self.hass.services.async_call(
+                                "light", "turn_on",
+                                {
+                                    "entity_id": light.entity_id,
+                                    "rgb_color": list(winner.color),
+                                    "brightness": light.brightness,
+                                },
+                                blocking=False,
+                            )
+                except Exception:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Signal Lights: failed to control light %s", light.entity_id
+                    )
+        else:
+            # Normal mode (no cycling): cancel any running timer and reset index
+            self._cancel_cycle_timer()
+            self._cycle_index = 0
+            states = self.engine.evaluate()
+            for entity_id, state in states.items():
+                try:
+                    if state is None:
+                        await self.hass.services.async_call(
+                            "light",
+                            "turn_off",
+                            {"entity_id": entity_id},
+                            blocking=False,
+                        )
+                    else:
+                        await self.hass.services.async_call(
+                            "light",
+                            "turn_on",
+                            {
+                                "entity_id": entity_id,
+                                "rgb_color": list(state["rgb_color"]),
+                                "brightness": state["brightness"],
+                            },
+                            blocking=False,
+                        )
+                except Exception:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Signal Lights: failed to control light %s", entity_id
+                    )
 
     async def _apply_notifications(self) -> None:
         """Send/update/clear notifications based on the current winning signal."""
@@ -317,9 +405,18 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
             for s in self.engine.signals
         ]
+        cycle_interval = self._get_cycle_interval()
+        cycling_active = cycle_interval > 0 and len(active_signals) >= 2
+        cycle_signal = (
+            active_signals[self._cycle_index % len(active_signals)].signal
+            if cycling_active
+            else None
+        )
+        # When cycling, report the currently-displayed signal instead of the winner
+        display_signal = cycle_signal if cycling_active else winner
         return {
-            "active_signal": winner.name if winner else "none",
-            "active_color": _rgb_to_hex(winner.color) if winner else "#000000",
+            "active_signal": display_signal.name if display_signal else "none",
+            "active_color": _rgb_to_hex(display_signal.color) if display_signal else "#000000",
             "queue_depth": len(active_signals),
             "is_active": len(active_signals) > 0,
             "active_signal_names": [a.signal.name for a in active_signals],
@@ -327,6 +424,8 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "lights": self.store.get_lights(),
             "notifications": self.store.get_notification_config(),
             "signal_errors": dict(self._signal_errors),
+            "cycle_interval": cycle_interval,
+            "cycle_index": self._cycle_index if cycling_active else 0,
         }
 
     async def _async_update_data(self) -> dict[str, Any]:
@@ -341,6 +440,9 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_reload_config(self) -> None:
         """Reload configuration from store and re-setup template listeners."""
+        # Cancel cycle timer on reload — it will be restarted by _apply_light_states if needed
+        self._cancel_cycle_timer()
+        self._cycle_index = 0
         self._load_engine_config()
         self._setup_template_listeners()
         await self._flush()
@@ -379,7 +481,8 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     async def async_shutdown(self) -> None:
-        """Clean up template listeners on shutdown."""
+        """Clean up template listeners and cycle timer on shutdown."""
+        self._cancel_cycle_timer()
         for unsub in self._template_unsubs:
             unsub.async_remove()
         self._template_unsubs.clear()

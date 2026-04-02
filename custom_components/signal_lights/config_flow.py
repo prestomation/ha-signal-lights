@@ -21,7 +21,7 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from .const import DOMAIN
+from .const import DOMAIN, CONF_CYCLE_INTERVAL, DEFAULT_CYCLE_INTERVAL
 from .engine import generate_template_from_trigger, validate_trigger_config
 
 _LOGGER = logging.getLogger(__name__)
@@ -106,6 +106,8 @@ class SignalLightsOptionsFlow(OptionsFlow):
                 return await self.async_step_reorder_signals()
             if action == "configure_notifications":
                 return await self.async_step_configure_notifications()
+            if action == "configure_cycling":
+                return await self.async_step_configure_cycling()
             return self.async_create_entry(title="", data={})
 
         store = self._get_store()
@@ -137,6 +139,9 @@ class SignalLightsOptionsFlow(OptionsFlow):
             )
         menu_options.append(
             selector.SelectOptionDict(value="configure_notifications", label="🔔 Configure notifications")
+        )
+        menu_options.append(
+            selector.SelectOptionDict(value="configure_cycling", label="🔄 Configure signal cycling")
         )
 
         return self.async_show_form(
@@ -651,6 +656,47 @@ class SignalLightsOptionsFlow(OptionsFlow):
             description_placeholders={
                 "current_status": "enabled" if current_enabled else "disabled",
             },
+        )
+
+
+    # -----------------------------------------------------------------------
+    # Configure signal cycling
+    # -----------------------------------------------------------------------
+
+    async def async_step_configure_cycling(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Configure signal cycling settings."""
+        if user_input is not None:
+            cycle_interval = int(user_input.get(CONF_CYCLE_INTERVAL, DEFAULT_CYCLE_INTERVAL))
+            # Persist in options so the coordinator can read it
+            new_options = dict(self.config_entry.options)
+            new_options[CONF_CYCLE_INTERVAL] = cycle_interval
+            self.hass.config_entries.async_update_entry(
+                self.config_entry, options=new_options
+            )
+            await self._reload_coordinator()
+            return self.async_create_entry(title="", data={})
+
+        current_value = int(
+            self.config_entry.options.get(CONF_CYCLE_INTERVAL, DEFAULT_CYCLE_INTERVAL)
+        )
+
+        return self.async_show_form(
+            step_id="configure_cycling",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_CYCLE_INTERVAL, default=current_value): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0,
+                            max=300,
+                            step=1,
+                            mode=selector.NumberSelectorMode.BOX,
+                            unit_of_measurement="seconds",
+                        )
+                    ),
+                }
+            ),
         )
 
 
