@@ -328,11 +328,7 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self, signal_name: str, all_signal_names: list[str], targets: list[str]
     ) -> None:
         """Send or update persistent notification and mobile targets."""
-        if len(all_signal_names) > 1:
-            others = [n for n in all_signal_names if n != signal_name]
-            message = f"{signal_name}\nAlso active: {', '.join(others)}"
-        else:
-            message = signal_name
+        message = "\n".join(all_signal_names)
 
         # HA sidebar persistent notification
         try:
