@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.2.0] - 2026-04-02
+
+### Added
+- **Signal cycling**: when multiple signals are active for the same light, the light automatically cycles through them in priority order. Default dwell time is 3 seconds; configurable via Settings → Integrations → Signal Lights → Configure → 🔄 Configure signal cycling.
+- **Notifications list all active signals**: persistent and mobile notifications now show every active signal (one per line, highest priority first) instead of only the winner.
+
 ## [Unreleased] - 2026-03-20
 
 ### Added
