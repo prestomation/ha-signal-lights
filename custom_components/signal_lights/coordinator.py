@@ -52,6 +52,7 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.engine = SignalEngine()
         self._template_unsubs: list[Any] = []
         self._last_notified_signal: str | None = None
+        self._last_notified_signal_names: list[str] = []
         self._signal_errors: dict[str, str] = {}
         self._flush_lock = asyncio.Lock()
         # Per-entry notification tag prevents cross-entry notification collisions
@@ -280,16 +281,18 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
 
     async def _apply_notifications(self) -> None:
-        """Send/update/clear notifications based on the current winning signal."""
+        """Send/update/clear notifications based on all active signals."""
         notif_config = self.store.get_notification_config()
         if not notif_config.get("enabled", False):
             return
 
+        active_signals = self.engine.get_active_signals()
+        active_names = [a.signal.name for a in active_signals]
         winner = self.engine.get_global_winner()
         current_name = winner.name if winner else None
 
         # No change — skip
-        if current_name == self._last_notified_signal:
+        if active_names == self._last_notified_signal_names:
             return
 
         notify_targets = notif_config.get("targets", [])
@@ -298,10 +301,11 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # All signals cleared — dismiss notifications
             await self._dismiss_notifications(notify_targets)
         else:
-            # New or changed winner — send/update
-            await self._send_notifications(current_name, notify_targets)
+            # New or changed signals — send/update with full list
+            await self._send_notifications(current_name, active_names, notify_targets)
 
         self._last_notified_signal = current_name
+        self._last_notified_signal_names = active_names
 
     async def _call_notify_target(self, target: str, data: dict) -> None:
         """Call a notify service target with the given data.
@@ -320,8 +324,17 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except Exception:  # noqa: BLE001
                 _LOGGER.debug("Failed to call notify target %s", target)
 
-    async def _send_notifications(self, signal_name: str, targets: list[str]) -> None:
+    async def _send_notifications(
+        self, signal_name: str, all_signal_names: list[str], targets: list[str]
+    ) -> None:
         """Send or update persistent notification and mobile targets."""
+        if len(all_signal_names) > 1:
+            # Show winner first, then list remaining signals
+            others = [n for n in all_signal_names if n != signal_name]
+            message = f"{signal_name}\nAlso active: {', '.join(others)}"
+        else:
+            message = signal_name
+
         # HA sidebar persistent notification
         try:
             await self.hass.services.async_call(
@@ -329,7 +342,7 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "create",
                 {
                     "title": NOTIFICATION_TITLE,
-                    "message": signal_name,
+                    "message": message,
                     "notification_id": self._notification_tag,
                 },
                 blocking=False,
@@ -350,7 +363,7 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 target,
                 {
                     "title": NOTIFICATION_TITLE,
-                    "message": signal_name,
+                    "message": message,
                     "data": {"tag": self._notification_tag},
                 },
             )
