@@ -54,6 +54,8 @@ def _build_entry_snapshots(domain_data: dict, entry_id_filter: str | None = None
                 "queue_depth": active_data.get("queue_depth", 0),
                 "is_active": active_data.get("is_active", False),
                 "signal_errors": active_data.get("signal_errors", {}),
+                "cycle_interval": active_data.get("cycle_interval", 0),
+                "cycle_index": active_data.get("cycle_index", 0),
             })
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Signal Lights: error building snapshot for entry %s", eid)

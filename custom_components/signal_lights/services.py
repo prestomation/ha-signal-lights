@@ -11,7 +11,7 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 
-from .const import DOMAIN, DOMAIN_GLOBAL, NOTIFY_TARGET_RE
+from .const import DOMAIN, DOMAIN_GLOBAL, NOTIFY_TARGET_RE, CONF_CYCLE_INTERVAL
 from .coordinator import SignalLightsCoordinator
 from .engine import generate_template_from_trigger, validate_trigger_config
 
@@ -160,6 +160,15 @@ CONFIGURE_NOTIFICATIONS_SCHEMA = vol.Schema(
     {
         vol.Required("enabled"): cv.boolean,
         vol.Optional("targets", default=[]): [_validate_notify_target],
+        **_ENTRY_ID_FIELD,
+    }
+)
+
+SET_CYCLE_INTERVAL_SCHEMA = vol.Schema(
+    {
+        vol.Required("cycle_interval_seconds"): vol.All(
+            vol.Coerce(int), vol.Range(min=0, max=300)
+        ),
         **_ENTRY_ID_FIELD,
     }
 )
@@ -664,12 +673,35 @@ async def async_register_services(hass: HomeAssistant) -> None:
         schema=CONFIGURE_NOTIFICATIONS_SCHEMA,
     )
 
+    async def handle_set_cycle_interval(call: ServiceCall) -> None:
+        """Handle signal_lights.set_cycle_interval."""
+        coord = _resolve_coordinator(hass, call)
+        if coord is None:
+            return
+        cycle_interval = call.data["cycle_interval_seconds"]
+        # Update the config entry options
+        entry = coord._entry  # noqa: SLF001
+        new_options = dict(entry.options)
+        new_options[CONF_CYCLE_INTERVAL] = cycle_interval
+        hass.config_entries.async_update_entry(entry, options=new_options)
+        await coord.async_reload_config()
+        _LOGGER.info(
+            "Signal Lights: cycle interval set to %d seconds", cycle_interval
+        )
+
+    hass.services.async_register(
+        DOMAIN,
+        "set_cycle_interval",
+        handle_set_cycle_interval,
+        schema=SET_CYCLE_INTERVAL_SCHEMA,
+    )
+
 
 async def async_unregister_services(hass: HomeAssistant) -> None:
     """Unregister all Signal Lights services."""
     for service in (
         "trigger_signal", "dismiss_signal", "refresh",
         "add_light", "remove_light", "add_signal", "update_signal", "remove_signal",
-        "reorder_signals", "configure_notifications",
+        "reorder_signals", "configure_notifications", "set_cycle_interval",
     ):
         hass.services.async_remove(DOMAIN, service)
