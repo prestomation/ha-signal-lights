@@ -93,6 +93,14 @@ jobs:
             exit 1
           fi
 
+      - name: Verify release zip exists
+        run: |
+          if [ ! -f signal_lights.zip ]; then
+            echo "ERROR: signal_lights.zip not found — release would be missing the zip asset that HACS requires"
+            exit 1
+          fi
+          echo "signal_lights.zip exists ($(du -h signal_lights.zip | cut -f1))"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
