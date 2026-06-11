@@ -3,40 +3,21 @@
 ## [Unreleased]
 
 ### Fixed
-- **Adding/editing signals was broken on current Home Assistant releases**
-  (#12, #13): template validation called `Template()` without the now-required
-  `hass` argument, so every `add_signal`/`update_signal` call failed — and the
-  failure was only logged, so the card's Save/Add buttons appeared to do
-  nothing. Validation now passes `hass` (and actually compiles the template
-  via `ensure_valid()`).
-- **Service errors are now surfaced to the caller** (#12, #13): invalid
-  trigger config, duplicate names, unknown signals/lights, etc. raise
-  `ServiceValidationError` instead of logging silently, so the Lovelace card
-  shows the real error in its toast and automations fail visibly.
-- **Editing a signal's trigger now takes effect** (#13): `update_signal`
-  regenerates the stored Jinja2 template when `trigger_mode`/`trigger_config`
-  change (unless an explicit template is supplied). Previously the engine
-  kept evaluating the old template.
-- **Card re-renders after a successful save** (#13): the WS update that
-  arrives while an edit/add form is open is intentionally buffered to avoid
-  disrupting typing — but the card never re-rendered afterwards, leaving the
-  edit panel open with stale data. Save/Add/Cancel now re-render from the
-  buffered state.
-- **Entity picker always usable** (#12): `ha-entity-picker` is lazy-loaded by
-  the HA frontend and could be inert on dashboards that never loaded it. The
-  card now force-loads it via the card helpers and, until it's available,
-  renders a plain text input with entity-ID suggestions. Submitting without
-  an entity now shows a clear validation message instead of a cryptic backend
-  error.
-
-### Added
-- Self-managing Docker integration test harness: `pytest tests/integration`
-  starts/stops the HA compose stack itself and restores seeded storage;
-  includes an HA WebSocket client used to test services over the card's
-  transport.
-- Regression test suites for #12/#13 (frontend jsdom tests driving the real
-  card element, plus Docker-backed service tests) and comprehensive service
-  API integration tests.
+- Adding and editing signals was broken on recent Home Assistant releases —
+  the Save and Add Signal buttons appeared to do nothing (#12, #13). Older
+  Home Assistant versions were not affected.
+- When saving a signal fails (for example a duplicate name or an incomplete
+  trigger), the card now shows an error message instead of failing silently.
+- Changing a signal's trigger (entity, state, or threshold) now takes effect
+  immediately. Previously the signal kept firing on its old trigger until it
+  was deleted and recreated.
+- After saving or adding a signal or light, the card updates right away to
+  show the change. Previously the edit panel stayed open showing old values.
+- The entity selector in the card now always works. On some dashboards it
+  appeared but could not be clicked or typed into, making it impossible to
+  pick an entity (#12).
+- Clearer messages when a form is submitted with a missing field (entity,
+  state, name, or template).
 
 ## [1.2.0] - 2026-04-02
 

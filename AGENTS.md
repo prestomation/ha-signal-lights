@@ -46,6 +46,18 @@ tests/
 - **Per-light filtering** — signals can target specific lights
 - **Sort order tie-breaking** — deterministic when priorities match
 
+## Changelog Conventions
+
+CHANGELOG.md is written for end users, never for developers:
+
+- Describe bugs and features only by their user-visible behavior
+  (e.g. "the Save button appeared to do nothing"), not by their cause or fix.
+- Never mention implementation details: class/function names, internal APIs,
+  file names, error types, or frontend/backend mechanics.
+- Developer-facing changes (test harnesses, CI, refactors, tooling) do not
+  get changelog entries at all — they belong in commit messages and PR
+  descriptions.
+
 ## Codeowner
 
 @prestomation
