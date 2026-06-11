@@ -58,7 +58,19 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          # Pre-release tags (v1.3.0b1, v1.3.0rc2) become GitHub pre-releases:
+          # HACS only offers them to users who enabled "Show beta versions".
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(a|b|rc)[0-9]+$ ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          else
+            echo "Unrecognized version tag 'v${VERSION}' — use vX.Y.Z or vX.Y.Z{a|b|rc}N" >&2
+            exit 1
+          fi
 
       - name: Bump version in manifest
         env:
@@ -66,6 +78,9 @@ jobs:
         run: python scripts/bump-version.py $VERSION
 
       - name: Commit version bump
+        # Pre-releases carry the beta version only inside the release zip —
+        # main's manifest.json stays at the last full release.
+        if: steps.version.outputs.prerelease == 'false'
         run: bash scripts/commit-version-bump.sh ${{ steps.version.outputs.version }}
 
       - name: Extract changelog for this version
@@ -107,5 +122,5 @@ jobs:
           name: "v${{ steps.version.outputs.version }}"
           body: ${{ steps.changelog.outputs.notes }}
           draft: false
-          prerelease: false
+          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
           files: signal_lights.zip
