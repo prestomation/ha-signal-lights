@@ -160,8 +160,89 @@ function _readTriggerConfig(container, idPrefix, mode) {
   return { triggerConfig, template };
 }
 
+/** Domain filters per trigger mode for entity selection. */
+const _PICKER_DOMAINS = {
+  entity_on: ['binary_sensor', 'switch', 'light', 'input_boolean'],
+  numeric_threshold: ['sensor'],
+  light_only: ['light'],
+};
+
 /**
- * Creates and injects a ha-entity-picker into the container placeholder.
+ * ha-entity-picker is lazy-loaded by the HA frontend — on dashboards where
+ * nothing else has imported it, document.createElement returns an inert
+ * unknown element (issue #12). Force-load it via the card helpers: creating
+ * the entities-card config element imports ha-entity-picker.
+ * Returns a Promise<boolean> — whether the element is now registered.
+ */
+let _pickerLoadPromise = null;
+function _ensureEntityPickerLoaded() {
+  if (customElements.get('ha-entity-picker')) return Promise.resolve(true);
+  if (!_pickerLoadPromise) {
+    _pickerLoadPromise = (async () => {
+      try {
+        if (window.loadCardHelpers) {
+          const helpers = await window.loadCardHelpers();
+          const entitiesCard = await helpers.createCardElement({ type: 'entities', entities: [] });
+          if (entitiesCard && entitiesCard.constructor && entitiesCard.constructor.getConfigElement) {
+            await entitiesCard.constructor.getConfigElement();
+          }
+        }
+      } catch (err) {
+        // ignore — fall back to the plain input
+      }
+      const available = !!customElements.get('ha-entity-picker');
+      if (!available) _pickerLoadPromise = null; // allow retry on next form open
+      return available;
+    })();
+  }
+  return _pickerLoadPromise;
+}
+
+function _createEntityPickerElement(idPrefix, mode, hass, value) {
+  const picker = document.createElement('ha-entity-picker');
+  picker.hass = hass;
+  picker.allowCustomEntity = true;
+  picker.id = `${idPrefix}-entity`;
+  const domains = _PICKER_DOMAINS[mode];
+  if (domains) picker.includeDomains = domains;
+  picker.value = value || '';
+  return picker;
+}
+
+/**
+ * Plain <input> + <datalist> of known entity IDs — always usable, even when
+ * ha-entity-picker can't be loaded.
+ */
+function _createFallbackEntityInput(idPrefix, mode, hass, value) {
+  const wrap = document.createElement('div');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = `${idPrefix}-entity`;
+  input.placeholder = 'sensor.example';
+  input.value = value || '';
+  const listId = `${idPrefix}-entity-options`;
+  input.setAttribute('list', listId);
+  const datalist = document.createElement('datalist');
+  datalist.id = listId;
+  const domains = _PICKER_DOMAINS[mode];
+  if (hass && hass.states) {
+    for (const entityId of Object.keys(hass.states).sort()) {
+      if (domains && !domains.includes(entityId.split('.')[0])) continue;
+      const option = document.createElement('option');
+      option.value = entityId;
+      datalist.appendChild(option);
+    }
+  }
+  wrap.appendChild(input);
+  wrap.appendChild(datalist);
+  return wrap;
+}
+
+/**
+ * Creates and injects an entity picker into the container placeholder.
+ * Uses ha-entity-picker when available; otherwise renders a plain input
+ * with entity suggestions immediately and upgrades to the real picker once
+ * it loads.
  * @param {Element} container - DOM element containing the form
  * @param {string} idPrefix - prefix for element IDs
  * @param {string} mode - trigger_mode (controls domain filter)
@@ -172,19 +253,34 @@ function _injectEntityPicker(container, idPrefix, mode, hass, currentValue) {
   const placeholder = container.querySelector(`#${idPrefix}-entity-container`);
   if (!placeholder) return;
 
-  const picker = document.createElement('ha-entity-picker');
-  picker.hass = hass;
-  picker.allowCustomEntity = true;
-  picker.id = `${idPrefix}-entity`;
-
-  if (mode === 'entity_on') {
-    picker.includeDomains = ['binary_sensor', 'switch', 'light', 'input_boolean'];
-  } else if (mode === 'numeric_threshold') {
-    picker.includeDomains = ['sensor'];
+  if (customElements.get('ha-entity-picker')) {
+    placeholder.appendChild(_createEntityPickerElement(idPrefix, mode, hass, currentValue));
+    return;
   }
 
-  picker.value = currentValue || '';
-  placeholder.appendChild(picker);
+  const fallback = _createFallbackEntityInput(idPrefix, mode, hass, currentValue);
+  placeholder.appendChild(fallback);
+  _ensureEntityPickerLoaded().then((available) => {
+    if (!available || !placeholder.isConnected) return;
+    const input = fallback.querySelector('input');
+    const picker = _createEntityPickerElement(
+      idPrefix, mode, hass, input ? input.value : currentValue
+    );
+    placeholder.replaceChildren(picker);
+  });
+}
+
+/**
+ * Validates the trigger form input before calling the backend.
+ * Returns a user-readable error string, or null when valid.
+ */
+function _validateTriggerInput(mode, triggerConfig, template) {
+  if (mode === 'template') {
+    return template ? null : 'Enter a Jinja2 template';
+  }
+  if (!triggerConfig.entity_id) return 'Select an entity for the trigger';
+  if (mode === 'entity_equals' && !triggerConfig.state) return 'Enter a target state';
+  return null;
 }
 
 /* ── Editor element ─────────────────────────────────────────────────────── */
@@ -966,7 +1062,10 @@ class SignalLightsCard extends HTMLElement {
     // Save handler
     container.querySelector('#sl-edit-sig-save').addEventListener('click', () => {
       const newName = container.querySelector('#sl-edit-sig-name').value.trim();
-      if (!newName) return;
+      if (!newName) {
+        this._showError('Enter a signal name');
+        return;
+      }
 
       const newColor = [
         parseInt(container.querySelector('#sl-edit-sig-color-r').value) || 0,
@@ -980,6 +1079,12 @@ class SignalLightsCard extends HTMLElement {
         : 0;
 
       const { triggerConfig: newTriggerConfig, template: newTemplate } = _readTriggerConfig(container, 'sl-edit-sig', newTriggerMode);
+
+      const validationError = _validateTriggerInput(newTriggerMode, newTriggerConfig, newTemplate);
+      if (validationError) {
+        this._showError(validationError);
+        return;
+      }
 
       const serviceData = {
         name: signal.name,
@@ -999,14 +1104,18 @@ class SignalLightsCard extends HTMLElement {
 
       this._callService('signal_lights', 'update_signal', serviceData).then(() => {
         this._editingSignal = null;
-        // WS subscription will push the update
+        // The WS update for this change arrived while the edit form was open
+        // and was deliberately not applied (to avoid disrupting typing) — so
+        // re-render now from the updated caches (issue #13).
+        this._render();
       }).catch(err => this._showError(`Failed: ${err.message || err}`));
     });
 
-    // Cancel handler
+    // Cancel handler — full render to apply any updates that arrived while
+    // the form was open.
     container.querySelector('#sl-edit-sig-cancel').addEventListener('click', () => {
       this._editingSignal = null;
-      this._renderSignals();
+      this._render();
     });
   }
 
@@ -1098,7 +1207,7 @@ class SignalLightsCard extends HTMLElement {
         <div class="inline-form-inner">
           <div class="form-row">
             <label>Light entity</label>
-            <div id="sl-new-light-entity-container"></div>
+            <div id="sl-new-light-entity-container" class="entity-picker-container"></div>
           </div>
           <div class="form-row">
             <label>Brightness (1-255)</label>
@@ -1112,34 +1221,35 @@ class SignalLightsCard extends HTMLElement {
         </div>
       `;
 
-      const lightPicker = document.createElement('ha-entity-picker');
-      lightPicker.hass = this._hass;
-      lightPicker.includeDomains = ['light'];
-      lightPicker.allowCustomEntity = true;
-      lightPicker.id = 'sl-new-light-entity';
-      form.querySelector('#sl-new-light-entity-container').appendChild(lightPicker);
+      _injectEntityPicker(form, 'sl-new-light', 'light_only', this._hass, '');
 
       const slider = form.querySelector('#sl-new-light-brightness');
       const valSpan = form.querySelector('#sl-brightness-val');
       slider.addEventListener('input', () => { valSpan.textContent = slider.value; });
 
       form.querySelector('#sl-add-light-submit').addEventListener('click', () => {
-        const entityId = lightPicker.value || '';
+        const pickerEl = form.querySelector('#sl-new-light-entity');
+        const entityId = (pickerEl && pickerEl.value) || '';
         const brightness = parseInt(slider.value);
-        if (!entityId) return;
+        if (!entityId) {
+          this._showError('Select a light entity');
+          return;
+        }
         this._callService('signal_lights', 'add_light', {
           entity_id: entityId,
           brightness,
           ...this._entryIdData(),
         }).then(() => {
           this._showAddLight = false;
-          form.style.display = 'none';
+          // Re-render so the new light appears — the WS update was suppressed
+          // while the form was open (issue #13).
+          this._render();
         }).catch(err => this._showError(`Failed: ${err.message || err}`));
       });
 
       form.querySelector('#sl-add-light-cancel').addEventListener('click', () => {
         this._showAddLight = false;
-        form.style.display = 'none';
+        this._render();
       });
     } else {
       form.style.display = 'none';
@@ -1237,7 +1347,10 @@ class SignalLightsCard extends HTMLElement {
     // Submit handler
     form.querySelector('#sl-add-signal-submit').addEventListener('click', () => {
       const name = form.querySelector('#sl-sig-name').value.trim();
-      if (!name) return;
+      if (!name) {
+        this._showError('Enter a signal name');
+        return;
+      }
 
       const color = [
         parseInt(form.querySelector('#sl-sig-color-r').value) || 0,
@@ -1250,6 +1363,12 @@ class SignalLightsCard extends HTMLElement {
 
       const { triggerConfig, template } = _readTriggerConfig(form, 'sl-sig', triggerMode);
 
+      const validationError = _validateTriggerInput(triggerMode, triggerConfig, template);
+      if (validationError) {
+        this._showError(validationError);
+        return;
+      }
+
       this._callService('signal_lights', 'add_signal', {
         name,
         color,
@@ -1261,13 +1380,15 @@ class SignalLightsCard extends HTMLElement {
         ...this._entryIdData(),
       }).then(() => {
         this._showAddSignal = false;
-        form.style.display = 'none';
+        // Re-render so the new signal appears — the WS update was suppressed
+        // while the form was open (issue #13).
+        this._render();
       }).catch(err => this._showError(`Failed: ${err.message || err}`));
     });
 
     form.querySelector('#sl-add-signal-cancel').addEventListener('click', () => {
       this._showAddSignal = false;
-      form.style.display = 'none';
+      this._render();
     });
   }
 

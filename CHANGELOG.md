@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Adding and editing signals was broken on recent Home Assistant releases —
+  the Save and Add Signal buttons appeared to do nothing (#12, #13). Older
+  Home Assistant versions were not affected.
+- When saving a signal fails (for example a duplicate name or an incomplete
+  trigger), the card now shows an error message instead of failing silently.
+- Changing a signal's trigger (entity, state, or threshold) now takes effect
+  immediately. Previously the signal kept firing on its old trigger until it
+  was deleted and recreated.
+- After saving or adding a signal or light, the card updates right away to
+  show the change. Previously the edit panel stayed open showing old values.
+- The entity selector in the card now always works. On some dashboards it
+  appeared but could not be clicked or typed into, making it impossible to
+  pick an entity (#12).
+- Clearer messages when a form is submitted with a missing field (entity,
+  state, name, or template).
+
 ## [1.2.0] - 2026-04-02
 
 ### Added
