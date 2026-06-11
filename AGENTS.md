@@ -58,6 +58,12 @@ CHANGELOG.md is written for end users, never for developers:
   get changelog entries at all — they belong in commit messages and PR
   descriptions.
 
+## Pull Request Conventions
+
+- Create PRs ready for review (not draft) and enable auto-merge (squash) so
+  they merge as soon as CI passes. If auto-merge is unavailable on the
+  repository, merge after confirming all checks are green.
+
 ## Codeowner
 
 @prestomation
