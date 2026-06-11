@@ -14,3 +14,7 @@ build/
 *.swp
 *.swo
 .DS_Store
+
+# Coverage artifacts
+.coverage
+htmlcov/
