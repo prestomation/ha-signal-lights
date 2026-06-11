@@ -16,6 +16,7 @@ dev = [
     "pytest-cov>=4.0",
     "pytest-timeout>=2.0",
     "requests>=2.31",
+    "websocket-client>=1.7",
 ]
 
 [tool.pytest.ini_options]

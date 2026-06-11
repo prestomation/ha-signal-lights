@@ -35,13 +35,34 @@ find custom_components -name "*.py" -exec python -m py_compile {} +
 ```
 
 ### Integration tests (requires Docker)
+
+The harness manages the Docker lifecycle itself — just run pytest:
+
 ```bash
+cd tests/integration
+python -m pytest . -v --tb=short --timeout=300
+```
+
+If Home Assistant is not already running on `:8123`, the session fixture
+starts the compose stack, waits for readiness, runs the tests, tears the
+stack down, and restores the seeded `.storage` files so repeated runs start
+from identical state. If HA is already up (e.g. started manually or by CI),
+the fixture uses it as-is and leaves lifecycle management to whoever
+started it:
+
+```bash
+# optional: manage the stack yourself for faster iteration
 cd tests/integration
 docker compose up -d
 bash ../../scripts/wait-for-ha.sh
 python -m pytest . -v --tb=short --timeout=300
 docker compose down -v
 ```
+
+Integration tests talk to HA over both REST and the WebSocket API
+(`conftest.HaWsClient`) — the WS path is the same transport the Lovelace
+card uses, so service errors and `signal_lights/config` / `subscribe`
+behavior are exercised exactly as the card sees them.
 
 ### Run everything (except integration)
 ```bash

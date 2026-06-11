@@ -18,3 +18,20 @@ build/
 # Coverage artifacts
 .coverage
 htmlcov/
+
+# HA runtime files generated during Docker integration tests.
+# The three seeded .storage files stay tracked (gitignore does not affect
+# already-tracked files); everything else in ha_config is generated.
+tests/integration/ha_config/.storage/*
+tests/integration/ha_config/.HA_VERSION
+tests/integration/ha_config/.ha_run.lock
+tests/integration/ha_config/.cloud/
+tests/integration/ha_config/blueprints/
+tests/integration/ha_config/deps/
+tests/integration/ha_config/tts/
+tests/integration/ha_config/home-assistant.log*
+tests/integration/ha_config/home-assistant_v2.db*
+tests/integration/ha_config/automations.yaml
+tests/integration/ha_config/scenes.yaml
+tests/integration/ha_config/scripts.yaml
+tests/integration/ha_config/secrets.yaml

@@ -9,6 +9,7 @@ import re
 import voluptuous as vol
 
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN, DOMAIN_GLOBAL, NOTIFY_TARGET_RE, CONF_CYCLE_INTERVAL
@@ -180,49 +181,45 @@ async def _validate_and_generate_template(
     trigger_config: dict,
     template: str,
     signal_name: str,
-) -> str | None:
-    """Validate trigger config and return resolved template, or None on error.
+) -> str:
+    """Validate trigger config and return the resolved template.
 
     For template mode: checks that a template string is provided.
     For other modes: validates trigger_config, auto-generates template if missing.
     In all cases: validates Jinja2 syntax of the resolved template.
-    Returns the (possibly generated) template string, or None if validation fails.
+    Raises ServiceValidationError on any problem so the failure reaches the
+    caller (e.g. the Lovelace card's error toast) instead of silently no-oping.
     """
     if trigger_mode == "template":
         if not template:
-            _LOGGER.error(
-                "Signal Lights: '%s' — template mode requires a template", signal_name
+            raise ServiceValidationError(
+                f"Signal '{signal_name}': template trigger mode requires a template"
             )
-            return None
     else:
         errors = validate_trigger_config(trigger_mode, trigger_config)
         if errors:
-            _LOGGER.error(
-                "Signal Lights: '%s' invalid trigger config: %s",
-                signal_name,
-                "; ".join(errors),
+            raise ServiceValidationError(
+                f"Signal '{signal_name}': invalid trigger config — {'; '.join(errors)}"
             )
-            return None
         if not template:
             try:
                 template = generate_template_from_trigger(trigger_mode, trigger_config)
             except ValueError as err:
-                _LOGGER.error(
-                    "Signal Lights: '%s' failed to generate template: %s",
-                    signal_name,
-                    err,
-                )
-                return None
+                raise ServiceValidationError(
+                    f"Signal '{signal_name}': failed to generate template — {err}"
+                ) from err
 
     if template:
         try:
             from homeassistant.helpers.template import Template as HaTemplate  # noqa: PLC0415
-            HaTemplate(template)
+            # hass is required by Template.__init__ in current HA releases
+            HaTemplate(template, hass).ensure_valid()
+        except ServiceValidationError:
+            raise
         except Exception as err:  # noqa: BLE001
-            _LOGGER.error(
-                "Signal Lights: '%s' — invalid Jinja2: %s", signal_name, err
-            )
-            return None
+            raise ServiceValidationError(
+                f"Signal '{signal_name}': invalid Jinja2 template — {err}"
+            ) from err
 
     return template
 
@@ -267,24 +264,30 @@ def _get_coordinator(
 
 def _resolve_coordinator(
     hass: HomeAssistant, call: ServiceCall
-) -> SignalLightsCoordinator | None:
-    """Return coordinator for the call, logging a warning when none is found.
+) -> SignalLightsCoordinator:
+    """Return the coordinator for the call, raising a clear error when none matches.
 
-    _get_coordinator already logs for: entry_id not found, multiple entries.
-    We only add a warning here for the zero-entries case (setup not loaded yet).
+    Raising ServiceValidationError (instead of silently ignoring the call)
+    surfaces the problem to the caller — e.g. the Lovelace card shows it in
+    its error toast.
     """
     entry_id = call.data.get("config_entry_id")
     coord = _get_coordinator(hass, entry_id)
-    if coord is None:
-        # Only log for the zero-coordinators case — other cases already logged
-        # by _get_coordinator (not-found, multiple setups).
-        domain_data = hass.data.get(DOMAIN, {})
-        has_any = bool(domain_data)
-        if not has_any:
-            _LOGGER.warning(
-                "Signal Lights: no active coordinator — ignoring service call"
-            )
-    return coord
+    if coord is not None:
+        return coord
+
+    domain_data = hass.data.get(DOMAIN, {})
+    if not domain_data:
+        raise ServiceValidationError(
+            "No Signal Lights setup is loaded — add the integration first"
+        )
+    if entry_id is not None:
+        raise ServiceValidationError(
+            f"Signal Lights setup '{entry_id}' was not found"
+        )
+    raise ServiceValidationError(
+        "Multiple Signal Lights setups exist — specify config_entry_id"
+    )
 
 
 def _find_light_conflict(
@@ -312,14 +315,10 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_trigger_signal(call: ServiceCall) -> None:
         """Handle signal_lights.trigger_signal."""
         coord = _resolve_coordinator(hass, call)
-        if coord is None:
-            return
         name = call.data["name"]
         result = await coord.async_trigger_signal(name)
         if not result:
-            _LOGGER.warning(
-                "signal_lights.trigger_signal: signal '%s' not found", name
-            )
+            raise ServiceValidationError(f"Signal '{name}' was not found")
 
     hass.services.async_register(
         DOMAIN, "trigger_signal", handle_trigger_signal, schema=TRIGGER_SIGNAL_SCHEMA
@@ -328,14 +327,11 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_dismiss_signal(call: ServiceCall) -> None:
         """Handle signal_lights.dismiss_signal."""
         coord = _resolve_coordinator(hass, call)
-        if coord is None:
-            return
         name = call.data["name"]
         result = await coord.async_dismiss_signal(name)
         if not result:
-            _LOGGER.warning(
-                "signal_lights.dismiss_signal: signal '%s' not found or not active",
-                name,
+            raise ServiceValidationError(
+                f"Signal '{name}' was not found or is not active"
             )
 
     hass.services.async_register(
@@ -345,8 +341,6 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_refresh(call: ServiceCall) -> None:
         """Handle signal_lights.refresh."""
         coord = _resolve_coordinator(hass, call)
-        if coord is None:
-            return
         await coord.async_refresh_signals()
 
     hass.services.async_register(
@@ -360,17 +354,14 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_add_light(call: ServiceCall) -> None:
         """Handle signal_lights.add_light."""
         coord = _resolve_coordinator(hass, call)
-        if coord is None:
-            return
 
         async with hass.data[DOMAIN_GLOBAL]["add_light_lock"]:
             # Enforce count limit
             current_lights = coord.store.get_lights()
             if len(current_lights) >= MAX_LIGHTS:
-                _LOGGER.error(
-                    "Signal Lights: cannot add light — limit of %d lights reached", MAX_LIGHTS
+                raise ServiceValidationError(
+                    f"Cannot add light — limit of {MAX_LIGHTS} lights reached"
                 )
-                return
 
             entity_id = call.data["entity_id"]
             brightness = call.data.get("brightness", 255)
@@ -379,15 +370,10 @@ async def async_register_services(hass: HomeAssistant) -> None:
             conflict = _find_light_conflict(hass, entity_id, coord)
             if conflict is not None:
                 conflict_entry_id, conflict_title = conflict
-                _LOGGER.error(
-                    "Signal Lights: light '%s' is already registered in setup '%s' (%s) — "
-                    "remove it there first before adding to '%s'",
-                    entity_id,
-                    conflict_title,
-                    conflict_entry_id,
-                    coord.entry_title,
+                raise ServiceValidationError(
+                    f"Light '{entity_id}' is already registered in setup "
+                    f"'{conflict_title}' ({conflict_entry_id}) — remove it there first"
                 )
-                return
 
             await coord.store.add_light(entity_id, brightness)
             await coord.async_reload_config()
@@ -400,15 +386,12 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_remove_light(call: ServiceCall) -> None:
         """Handle signal_lights.remove_light."""
         coord = _resolve_coordinator(hass, call)
-        if coord is None:
-            return
         entity_id = call.data["entity_id"]
         removed = await coord.store.remove_light(entity_id)
-        if removed:
-            await coord.async_reload_config()
-            _LOGGER.info("Signal Lights: removed light %s", entity_id)
-        else:
-            _LOGGER.warning("Signal Lights: light %s not found", entity_id)
+        if not removed:
+            raise ServiceValidationError(f"Light '{entity_id}' is not registered")
+        await coord.async_reload_config()
+        _LOGGER.info("Signal Lights: removed light %s", entity_id)
 
     hass.services.async_register(
         DOMAIN, "remove_light", handle_remove_light, schema=REMOVE_LIGHT_SCHEMA
@@ -417,8 +400,6 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_add_signal(call: ServiceCall) -> None:
         """Handle signal_lights.add_signal."""
         coord = _resolve_coordinator(hass, call)
-        if coord is None:
-            return
         trigger_mode = call.data.get("trigger_mode", "template")
         trigger_config = call.data.get("trigger_config", {})
         template = call.data.get("template", "")
@@ -427,11 +408,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
         # Enforce count limit
         current_signals = coord.store.get_signals()
         if len(current_signals) >= MAX_SIGNALS:
-            _LOGGER.error(
-                "Signal Lights: cannot add signal '%s' — limit of %d signals reached",
-                name, MAX_SIGNALS,
+            raise ServiceValidationError(
+                f"Cannot add signal '{name}' — limit of {MAX_SIGNALS} signals reached"
             )
-            return
 
         # Restrict template mode to admin users
         if trigger_mode == "template":
@@ -440,27 +419,21 @@ async def async_register_services(hass: HomeAssistant) -> None:
             if call.context.user_id:
                 user = await hass.auth.async_get_user(call.context.user_id)
                 if not user or not user.is_admin:
-                    _LOGGER.error(
-                        "Signal Lights: template trigger mode requires admin privileges"
+                    raise ServiceValidationError(
+                        "Template trigger mode requires admin privileges"
                     )
-                    return
 
         # Check for duplicate signal names
         if coord.store.get_signal_by_name(name) is not None:
-            _LOGGER.error(
-                "Signal Lights: signal named '%s' already exists, cannot add duplicate",
-                name,
+            raise ServiceValidationError(
+                f"A signal named '{name}' already exists"
             )
-            return
 
         # Validate trigger config and resolve template (shared helper).
-        # Returns None on any error (already logged); returns the resolved
-        # template string on success.
+        # Raises ServiceValidationError on any problem.
         resolved_template = await _validate_and_generate_template(
             hass, trigger_mode, trigger_config, template, name
         )
-        if resolved_template is None:
-            return
 
         # Warn about non-existent entities (not an error — entity might appear later)
         entity_id = trigger_config.get("entity_id", "")
@@ -493,15 +466,12 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_remove_signal(call: ServiceCall) -> None:
         """Handle signal_lights.remove_signal."""
         coord = _resolve_coordinator(hass, call)
-        if coord is None:
-            return
         name = call.data["name"]
         removed = await coord.store.remove_signal(name)
-        if removed:
-            await coord.async_reload_config()
-            _LOGGER.info("Signal Lights: removed signal '%s'", name)
-        else:
-            _LOGGER.warning("Signal Lights: signal '%s' not found", name)
+        if not removed:
+            raise ServiceValidationError(f"Signal '{name}' was not found")
+        await coord.async_reload_config()
+        _LOGGER.info("Signal Lights: removed signal '%s'", name)
 
     hass.services.async_register(
         DOMAIN, "remove_signal", handle_remove_signal, schema=REMOVE_SIGNAL_SCHEMA
@@ -510,17 +480,12 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_update_signal(call: ServiceCall) -> None:
         """Handle signal_lights.update_signal."""
         coord = _resolve_coordinator(hass, call)
-        if coord is None:
-            return
         name = call.data["name"]
 
         # Find the existing signal first
         existing = coord.store.get_signal_by_name(name)
         if existing is None:
-            _LOGGER.warning(
-                "signal_lights.update_signal: signal '%s' not found", name
-            )
-            return
+            raise ServiceValidationError(f"Signal '{name}' was not found")
 
         updates: dict = {}
 
@@ -529,10 +494,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
             new_name = call.data["new_name"]
             # Check for collision only if name actually changed
             if new_name != name and coord.store.get_signal_by_name(new_name) is not None:
-                _LOGGER.error(
-                    "Signal Lights: update_signal — a signal named '%s' already exists", new_name
+                raise ServiceValidationError(
+                    f"A signal named '{new_name}' already exists"
                 )
-                return
             updates["name"] = new_name
 
         if "color" in call.data:
@@ -576,40 +540,34 @@ async def async_register_services(hass: HomeAssistant) -> None:
             if call.context.user_id:
                 user = await hass.auth.async_get_user(call.context.user_id)
                 if not user or not user.is_admin:
-                    _LOGGER.error(
-                        "Signal Lights: template trigger mode requires admin privileges"
+                    raise ServiceValidationError(
+                        "Template trigger mode requires admin privileges"
                     )
-                    return
 
         if needs_validation:
-            # Validate and resolve the template using the shared helper
-            resolved_template = await _validate_and_generate_template(
-                hass, new_trigger_mode, new_trigger_config, new_template, name
+            # For non-template modes the stored template is what the engine
+            # actually evaluates, so it must be regenerated from the updated
+            # trigger config — unless the caller supplied an explicit template.
+            # (Previously the old template was kept, so trigger edits from the
+            # card silently never took effect — issue #13.)
+            template_for_resolution = new_template
+            if new_trigger_mode != "template" and not template_explicitly_updated:
+                template_for_resolution = ""
+            updates["template"] = await _validate_and_generate_template(
+                hass, new_trigger_mode, new_trigger_config, template_for_resolution, name
             )
-            if resolved_template is None:
-                return
-            updates["template"] = resolved_template
-        elif template_explicitly_updated and new_template:
-            # Template changed without mode/config change — validate Jinja2 only
-            try:
-                from homeassistant.helpers.template import Template as HaTemplate  # noqa: PLC0415
-                HaTemplate(new_template)
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.error(
-                    "Signal Lights: update_signal '%s' — invalid Jinja2: %s", name, err
-                )
-                return
 
         if not updates:
             _LOGGER.debug("signal_lights.update_signal: no fields to update for '%s'", name)
             return
 
         saved = await coord.store.update_signal(name, updates)
-        if saved:
-            await coord.async_reload_config()
-            _LOGGER.info("Signal Lights: updated signal '%s' with %s", name, list(updates.keys()))
-        else:
-            _LOGGER.warning("signal_lights.update_signal: signal '%s' disappeared before save", name)
+        if not saved:
+            raise ServiceValidationError(
+                f"Signal '{name}' disappeared before the update could be saved"
+            )
+        await coord.async_reload_config()
+        _LOGGER.info("Signal Lights: updated signal '%s' with %s", name, list(updates.keys()))
 
     hass.services.async_register(
         DOMAIN, "update_signal", handle_update_signal, schema=UPDATE_SIGNAL_SCHEMA
@@ -618,8 +576,6 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_reorder_signals(call: ServiceCall) -> None:
         """Handle signal_lights.reorder_signals."""
         coord = _resolve_coordinator(hass, call)
-        if coord is None:
-            return
         ordered_names = call.data["order"]
 
         # Validate that all provided names exist
@@ -627,11 +583,9 @@ async def async_register_services(hass: HomeAssistant) -> None:
         known_names = {s["name"] for s in current_signals}
         unknown = [n for n in ordered_names if n not in known_names]
         if unknown:
-            _LOGGER.error(
-                "Signal Lights: reorder_signals — unknown signal name(s): %s",
-                unknown,
+            raise ServiceValidationError(
+                f"Unknown signal name(s): {', '.join(unknown)}"
             )
-            return
 
         await coord.store.reorder_signals(ordered_names)
         await coord.async_reload_config()
@@ -644,19 +598,15 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_configure_notifications(call: ServiceCall) -> None:
         """Handle signal_lights.configure_notifications."""
         coord = _resolve_coordinator(hass, call)
-        if coord is None:
-            return
         enabled = call.data["enabled"]
         targets = call.data.get("targets", [])
 
         # Enforce count limit
         if len(targets) > MAX_TARGETS:
-            _LOGGER.error(
-                "Signal Lights: cannot configure notifications — limit of %d targets reached "
-                "(%d provided)",
-                MAX_TARGETS, len(targets),
+            raise ServiceValidationError(
+                f"At most {MAX_TARGETS} notify targets are allowed "
+                f"({len(targets)} provided)"
             )
-            return
 
         await coord.store.set_notification_config(enabled, targets)
         await coord.async_reload_config()
@@ -676,8 +626,6 @@ async def async_register_services(hass: HomeAssistant) -> None:
     async def handle_set_cycle_interval(call: ServiceCall) -> None:
         """Handle signal_lights.set_cycle_interval."""
         coord = _resolve_coordinator(hass, call)
-        if coord is None:
-            return
         cycle_interval = call.data["cycle_interval_seconds"]
         # Update the config entry options
         entry = coord._entry  # noqa: SLF001
