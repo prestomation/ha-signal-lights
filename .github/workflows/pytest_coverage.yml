@@ -40,7 +40,9 @@ jobs:
 
       - name: Run unit tests with coverage
         run: |
-          python -m pytest tests/test_engine.py tests/unit \
+          # Discover all unit tests; exclude tests/integration, which needs a
+          # live Home Assistant in Docker (covered by the integration workflow).
+          python -m pytest tests/ --ignore=tests/integration \
             --cov=custom_components/signal_lights --cov-report=term-missing
 
       - name: "Generate coverage Comment (and possibly Post to PR)"
