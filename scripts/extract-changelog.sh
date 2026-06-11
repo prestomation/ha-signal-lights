@@ -14,10 +14,13 @@ set -euo pipefail
 VERSION="${1:?Usage: extract-changelog.sh <version>}"
 
 extract() {
+  # Emits the section body only — the header line is skipped because the
+  # GitHub release title already names the version (and beta fallbacks
+  # would otherwise leak an "## [Unreleased]" heading into release notes).
   awk -v ver="$1" '
     /^## \[/ {
       if (found) exit
-      if (index($0, "## [" ver "]") == 1) found = 1
+      if (index($0, "## [" ver "]") == 1) { found = 1; next }
     }
     found { print }
   ' CHANGELOG.md

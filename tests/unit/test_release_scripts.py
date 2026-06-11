@@ -104,6 +104,12 @@ class TestExtractChangelog:
         assert "Initial release" not in result.stdout
         assert "Unreleased fix line" not in result.stdout
 
+    def test_section_header_is_not_included(self, workdir):
+        """The release title already names the version — notes carry only
+        the section body."""
+        result = run_extract(workdir, "1.2.0")
+        assert "## [1.2.0]" not in result.stdout
+
     def test_extracts_oldest_section_without_trailing_sections(self, workdir):
         result = run_extract(workdir, "1.0.0")
         assert "Initial release" in result.stdout
@@ -120,6 +126,8 @@ class TestExtractChangelog:
         result = run_extract(workdir, "1.3.0b1")
         assert result.returncode == 0, result.stderr
         assert "Unreleased fix line" in result.stdout
+        # The "[Unreleased]" heading must not leak into published notes
+        assert "Unreleased]" not in result.stdout
 
     def test_unknown_release_version_yields_empty_output(self, workdir):
         """Final releases never fall back — the workflow's generic text kicks in."""
