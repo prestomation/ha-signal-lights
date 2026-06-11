@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.3.0] - 2026-06-11
 
 ### Fixed
 - Adding and editing signals was broken on recent Home Assistant releases —
