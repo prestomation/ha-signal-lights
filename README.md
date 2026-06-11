@@ -1,13 +1,20 @@
 # Signal Lights
 
-[![GitHub Release](https://img.shields.io/github/v/release/prestomation/ha-signal-lights?style=for-the-badge)](https://github.com/prestomation/ha-signal-lights/releases)
-[![GitHub Downloads](https://img.shields.io/github/downloads/prestomation/ha-signal-lights/total.svg?style=for-the-badge)](https://github.com/prestomation/ha-signal-lights/releases)
-[![GitHub Latest Downloads](https://img.shields.io/github/downloads-pre/prestomation/ha-signal-lights/latest/total?style=for-the-badge)](https://github.com/prestomation/ha-signal-lights/releases)
-[![HACS Validation](https://github.com/prestomation/ha-signal-lights/actions/workflows/hacs.yml/badge.svg)](https://github.com/prestomation/ha-signal-lights/actions/workflows/hacs.yml)
-[![Validate](https://github.com/prestomation/ha-signal-lights/actions/workflows/lint.yml/badge.svg)](https://github.com/prestomation/ha-signal-lights/actions/workflows/lint.yml)
-[![Tests](https://github.com/prestomation/ha-signal-lights/actions/workflows/integration.yml/badge.svg)](https://github.com/prestomation/ha-signal-lights/actions/workflows/integration.yml)
-[![License](https://img.shields.io/github/license/prestomation/ha-signal-lights?style=flat-square)](LICENSE)
-[![HA Version](https://img.shields.io/badge/HA-2024.1+-blue?style=flat-square)](https://www.home-assistant.io/)
+[![Integration Usage][integration-usage-shield]][integration-usage]
+
+[![GitHub Downloads][downloads-shield]][releases]
+[![GitHub Latest Downloads][downloads-latest-shield]][releases]
+[![GitHub Release][releases-shield]][releases]
+[![GitHub Release Date][release-date-shield]][releases]
+[![GitHub Activity][commits-shield]][commits]
+[![Coverage][coverage-shield]][coverage]
+[![License][license-shield]](LICENSE)
+[![hacs][hacsbadge]][hacs]
+![Project Maintenance][maintenance-shield]
+[![HACS Validation][hacs-validation-shield]][hacs-validation]
+[![Validate][validate-shield]][validate]
+[![Tests][tests-shield]][tests]
+[![HA Version][ha-version-shield]][ha-version]
 
 A Home Assistant custom integration that manages a **priority queue of colored light signals**. Register physical light entities as notification outputs, define signals with colors and priorities, and the engine automatically pushes the highest-priority active signal's color to your lights.
 
@@ -147,3 +154,27 @@ Configure via the Lovelace card or the options flow.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+[integration-usage-shield]: https://img.shields.io/badge/dynamic/json?color=41BDF5&logo=home-assistant&label=integration%20usage&suffix=%20installs&cacheSeconds=15600&url=https%3A%2F%2Fanalytics.home-assistant.io%2Fcustom_integrations.json&query=%24.signal_lights.total&style=for-the-badge
+[integration-usage]: https://analytics.home-assistant.io/custom_integrations.json
+[commits-shield]: https://img.shields.io/github/last-commit/prestomation/ha-signal-lights?style=for-the-badge
+[commits]: https://github.com/prestomation/ha-signal-lights/commits/main
+[hacs]: https://github.com/custom-components/hacs
+[hacsbadge]: https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge
+[license-shield]: https://img.shields.io/github/license/prestomation/ha-signal-lights.svg?style=for-the-badge
+[maintenance-shield]: https://img.shields.io/badge/Maintainers-%40prestomation-blue.svg?style=for-the-badge
+[downloads-shield]: https://img.shields.io/github/downloads/prestomation/ha-signal-lights/total.svg?style=for-the-badge
+[downloads-latest-shield]: https://img.shields.io/github/downloads-pre/prestomation/ha-signal-lights/latest/total?style=for-the-badge
+[releases-shield]: https://img.shields.io/github/release/prestomation/ha-signal-lights.svg?style=for-the-badge
+[release-date-shield]: https://img.shields.io/github/release-date/prestomation/ha-signal-lights?style=for-the-badge
+[releases]: https://github.com/prestomation/ha-signal-lights/releases
+[coverage]: https://htmlpreview.github.io/?https://github.com/prestomation/ha-signal-lights/blob/python-coverage-comment-action-data/htmlcov/index.html
+[coverage-shield]: https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/prestomation/ha-signal-lights/python-coverage-comment-action-data/endpoint.json&style=for-the-badge
+[hacs-validation-shield]: https://github.com/prestomation/ha-signal-lights/actions/workflows/hacs.yml/badge.svg
+[hacs-validation]: https://github.com/prestomation/ha-signal-lights/actions/workflows/hacs.yml
+[validate-shield]: https://github.com/prestomation/ha-signal-lights/actions/workflows/lint.yml/badge.svg
+[validate]: https://github.com/prestomation/ha-signal-lights/actions/workflows/lint.yml
+[tests-shield]: https://github.com/prestomation/ha-signal-lights/actions/workflows/integration.yml/badge.svg
+[tests]: https://github.com/prestomation/ha-signal-lights/actions/workflows/integration.yml
+[ha-version-shield]: https://img.shields.io/badge/Home%20Assistant-2024.1%2B-blue.svg?style=for-the-badge
+[ha-version]: https://www.home-assistant.io/

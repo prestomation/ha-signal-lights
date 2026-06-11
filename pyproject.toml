@@ -13,6 +13,7 @@ requires-python = ">=3.10"
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=4.0",
     "pytest-timeout>=2.0",
     "requests>=2.31",
 ]
@@ -20,3 +21,11 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = true
+source = ["custom_components/signal_lights"]
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
