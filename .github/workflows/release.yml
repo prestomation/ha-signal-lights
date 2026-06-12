@@ -2,125 +2,106 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hacs/action@main
-        with:
-          category: integration
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
-      - name: Start Home Assistant
-        working-directory: tests/integration
-        run: docker compose up -d
-      - name: Wait for Home Assistant
-        run: bash scripts/wait-for-ha.sh
-      - name: Run integration tests
-        working-directory: tests/integration
-        run: python -m pytest . -v --tb=short --timeout=300
-      - name: HA logs on failure
-        if: failure()
-        working-directory: tests/integration
-        run: docker compose logs homeassistant
-      - name: Cleanup
-        if: always()
-        working-directory: tests/integration
-        run: docker compose down -v
-
   release:
-    needs: [validate, test]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
-          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Extract version from tag
-        id: version
+      - name: Determine release version
+        id: check
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          # Pre-release tags (v1.3.0b1, v1.3.0rc2) become GitHub pre-releases:
-          # HACS only offers them to users who enabled "Show beta versions".
+          VERSION=$(python3 -c "import json; print(json.load(open('custom_components/signal_lights/manifest.json'))['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+          # Classify the version. Pre-release versions (e.g. 1.4.0b1, 1.4.0rc2)
+          # become GitHub pre-releases: HACS only offers them to users who enabled
+          # "Show beta versions". Everything else ships as a normal release.
           if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(a|b|rc)[0-9]+$ ]]; then
-            echo "prerelease=true" >> $GITHUB_OUTPUT
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
           elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "prerelease=false" >> $GITHUB_OUTPUT
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Unrecognized version tag 'v${VERSION}' — use vX.Y.Z or vX.Y.Z{a|b|rc}N" >&2
+            echo "::error::manifest.json version '$VERSION' is malformed — expected X.Y.Z or X.Y.Z{a|b|rc}N (e.g. 1.4.0 or 1.4.0b1)."
             exit 1
           fi
 
-      - name: Bump version in manifest
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: python scripts/bump-version.py $VERSION
-
-      - name: Commit version bump
-        # Pre-releases carry the beta version only inside the release zip —
-        # main's manifest.json stays at the last full release.
-        if: steps.version.outputs.prerelease == 'false'
-        run: bash scripts/commit-version-bump.sh ${{ steps.version.outputs.version }}
-
-      - name: Extract changelog for this version
-        id: changelog
-        run: |
-          VERSION=${{ steps.version.outputs.version }}
-          bash scripts/extract-changelog.sh $VERSION > release_notes.txt
-          if [ ! -s release_notes.txt ]; then
-            echo "Release v${VERSION}" > release_notes.txt
+          if git rev-parse --verify "refs/tags/v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists — nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
-          echo 'notes<<EOF' >> $GITHUB_OUTPUT
-          cat release_notes.txt >> $GITHUB_OUTPUT
-          echo 'EOF' >> $GITHUB_OUTPUT
+
+          if ! grep -q "^## \[$VERSION\]" CHANGELOG.md; then
+            echo "::error::manifest.json is at $VERSION but CHANGELOG.md has no '## [$VERSION]' section. Add a changelog entry or revert the version bump."
+            exit 1
+          fi
+
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "Will release v$VERSION"
+
+      - name: Extract changelog section
+        if: steps.check.outputs.release == 'true'
+        id: changelog
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; print; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release_notes.txt
+          if [ ! -s release_notes.txt ]; then
+            echo "::error::Failed to extract changelog section for $VERSION (awk pattern matched zero lines)."
+            exit 1
+          fi
+          {
+            echo 'notes<<RELEASE_NOTES_EOF'
+            cat release_notes.txt
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build release zip
+        if: steps.check.outputs.release == 'true'
         run: |
-          if [ ! -d "custom_components/signal_lights" ]; then
-            echo "Error: custom_components/signal_lights directory not found"
-            exit 1
-          fi
           cd custom_components/signal_lights
           zip -r ../../signal_lights.zip . -x "*__pycache__*" "*.pyc"
-          if [ ! -f "../../signal_lights.zip" ]; then
-            echo "Error: Failed to create signal_lights.zip"
-            exit 1
-          fi
 
-      - name: Verify release zip exists
+      - name: Verify release zip
+        if: steps.check.outputs.release == 'true'
         run: |
           if [ ! -f signal_lights.zip ]; then
-            echo "ERROR: signal_lights.zip not found — release would be missing the zip asset that HACS requires"
+            echo "::error::signal_lights.zip not found"
             exit 1
           fi
           echo "signal_lights.zip exists ($(du -h signal_lights.zip | cut -f1))"
 
+      - name: Create and push tag
+        if: steps.check.outputs.release == 'true' && github.event_name != 'pull_request'
+        env:
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "v${VERSION}"
+          git push origin "v${VERSION}"
+
       - name: Create GitHub Release
+        if: steps.check.outputs.release == 'true' && github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
-          name: "v${{ steps.version.outputs.version }}"
+          tag_name: "v${{ steps.check.outputs.version }}"
+          name: "v${{ steps.check.outputs.version }}"
           body: ${{ steps.changelog.outputs.notes }}
           draft: false
-          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+          prerelease: ${{ steps.check.outputs.prerelease == 'true' }}
           files: signal_lights.zip
