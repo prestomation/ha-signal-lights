@@ -84,36 +84,42 @@ All CI workflows call scripts from `scripts/` — you can run the same checks lo
 
 ## Releases
 
-Releases are cut by pushing a tag; the Release workflow validates, runs the
-integration tests, builds `signal_lights.zip`, and publishes a GitHub release.
+Releases are produced by merging a PR that bumps the version — on the merge to
+`main`, the Release workflow reads the version from `manifest.json`, validates
+it, builds `signal_lights.zip`, tags the commit, and publishes the GitHub
+release automatically. No manual `git tag`. No commits back to `main` from CI.
+The version in `manifest.json` is the single source of truth.
 
 ### Full release
 
-```bash
-git tag v1.3.0 && git push origin v1.3.0
-```
+Open a PR with exactly these changes and merge it:
 
-- Published as a normal GitHub release — all HACS users are offered the update
-- `manifest.json` on `main` is bumped to the released version
-- Release notes come from the matching `## [1.3.0]` section in CHANGELOG.md
+- `custom_components/signal_lights/manifest.json` — bump `version` to `X.Y.Z`
+- `CHANGELOG.md` — add a `## [X.Y.Z] - YYYY-MM-DD` section
+
+On merge, the workflow verifies a matching `## [X.Y.Z]` changelog section
+exists, builds the zip, pushes tag `vX.Y.Z`, and creates the GitHub release
+(release notes come from that changelog section). All HACS users are offered
+the update. If tag `vX.Y.Z` already exists, the workflow is a no-op.
 
 ### Beta release
 
-```bash
-git tag v1.3.0b1 && git push origin v1.3.0b1   # also: a1 (alpha), rc1
-```
+Same flow, using a PEP 440 pre-release version (`bN` beta, `aN` alpha, `rcN`
+release candidate):
 
-- Published as a GitHub **pre-release** — HACS only offers it to users who
-  enabled **"Show beta versions"** for this repository (HACS → Signal Lights →
-  ⋮ → Redownload → toggle "Show beta versions")
-- `manifest.json` on `main` is **not** bumped; the beta version exists only
-  inside the release zip
-- Release notes fall back to the base version's changelog section, then to
-  `## [Unreleased]`
-- Tag betas on `main` — the release zip is built from the `main` branch
+- `custom_components/signal_lights/manifest.json` — bump `version` to `X.Y.ZbN` (e.g. `1.4.0b1`)
+- `CHANGELOG.md` — add a `## [1.4.0b1] - YYYY-MM-DD` section
 
-Tags that match neither `vX.Y.Z` nor `vX.Y.Z{a|b|rc}N` fail the workflow
-before anything is published.
+CI recognizes the pre-release version string and publishes a GitHub
+**pre-release** — HACS only offers it to users who enabled **"Show beta
+versions"** for this repository (HACS → Signal Lights → ⋮ → Redownload →
+toggle "Show beta versions"). Iterate with `b2`, `b3`, … as needed (each its
+own PR, release, and `## [X.Y.ZbN]` changelog section), then cut the final
+`X.Y.Z` with a normal bump. The beta version lives in `main`'s `manifest.json`
+until that final bump.
+
+A malformed `version` (matching neither `X.Y.Z` nor `X.Y.Z{a|b|rc}N`) fails the
+workflow before anything is published.
 
 ## Pull Request Process
 
