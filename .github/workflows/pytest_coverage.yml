@@ -25,7 +25,11 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          persist-credentials: false
+          # python-coverage-comment-action needs git push access to the
+          # coverage-data branch on push-to-main runs; persisted credentials
+          # are required for that (the action's own GITHUB_TOKEN input only
+          # covers its API calls, not its git CLI push).
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
