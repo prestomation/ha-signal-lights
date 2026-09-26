@@ -869,3 +869,30 @@ class TestTriggerValidation:
         raw = "{{ states('sensor.x') | int > 5 }}"
         result = generate_template_from_trigger("template", {"template": raw})
         assert result == raw
+
+
+# ---------------------------------------------------------------------------
+# Startup arming
+# ---------------------------------------------------------------------------
+
+should_activate_from_template = _engine_mod.should_activate_from_template
+
+
+class TestStartupArming:
+    """Event signals must not fire while Home Assistant is starting."""
+
+    def test_event_not_armed_does_not_fire(self):
+        assert should_activate_from_template("event", True, False) is False
+
+    def test_event_armed_fires(self):
+        assert should_activate_from_template("event", True, True) is True
+
+    def test_event_falsy_does_not_fire(self):
+        assert should_activate_from_template("event", False, True) is False
+
+    def test_condition_ignores_armed_flag(self):
+        assert should_activate_from_template("condition", True, False) is True
+        assert should_activate_from_template("condition", True, True) is True
+
+    def test_condition_falsy_does_not_activate(self):
+        assert should_activate_from_template("condition", False, False) is False

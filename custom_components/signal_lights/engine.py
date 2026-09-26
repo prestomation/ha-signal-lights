@@ -147,6 +147,23 @@ def generate_template_from_trigger(trigger_mode: str, trigger_config: dict[str, 
     return ""
 
 
+def should_activate_from_template(
+    trigger_type: str, is_truthy: bool, events_armed: bool
+) -> bool:
+    """Return True if a template result should activate the signal.
+
+    Event signals fire only when events are armed. Events are not armed
+    while Home Assistant starts, because entities then change from
+    'unknown' to their restored state and that is not a real event.
+    Condition signals show the current state, so they do not use the flag.
+    """
+    if not is_truthy:
+        return False
+    if trigger_type == "event":
+        return events_armed
+    return True
+
+
 @dataclass
 class Signal:
     """A single signal definition."""

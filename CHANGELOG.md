@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- Signals with a timeout (for example "someone came home") no longer light up
+  when Home Assistant starts. They now light up only when the change occurs
+  while Home Assistant is running.
+
 ## [1.3.0] - 2026-06-11
 
 ### Fixed
