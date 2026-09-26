@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.3.1b1] - 2026-09-26
 
 ### Fixed
 - Signals with a timeout (for example "someone came home") no longer light up
