@@ -8,14 +8,14 @@
 | custom\_components/signal\_lights/binary\_sensor.py |       24 |       24 |        2 |        0 |      0% |      7-55 |
 | custom\_components/signal\_lights/config\_flow.py   |      235 |      235 |       94 |        0 |      0% |     8-709 |
 | custom\_components/signal\_lights/const.py          |       11 |       11 |        0 |        0 |      0% |      3-21 |
-| custom\_components/signal\_lights/coordinator.py    |      225 |      225 |       68 |        0 |      0% |     7-512 |
+| custom\_components/signal\_lights/coordinator.py    |      240 |      240 |       74 |        0 |      0% |     7-545 |
 | custom\_components/signal\_lights/diagnostics.py    |       24 |       24 |        0 |        0 |      0% |      3-42 |
-| custom\_components/signal\_lights/engine.py         |      189 |        8 |       70 |        6 |     95% |29, 40, 65, 72, 81, 90, 215, 220 |
+| custom\_components/signal\_lights/engine.py         |      195 |        8 |       74 |        6 |     95% |29, 40, 65, 72, 81, 90, 232, 237 |
 | custom\_components/signal\_lights/sensor.py         |       55 |       55 |        8 |        0 |      0% |     9-116 |
 | custom\_components/signal\_lights/services.py       |      270 |      270 |      106 |        0 |      0% |     3-655 |
 | custom\_components/signal\_lights/store.py          |      122 |      122 |       36 |        0 |      0% |    29-258 |
 | custom\_components/signal\_lights/websocket.py      |       53 |       53 |       10 |        0 |      0% |     2-159 |
-| **TOTAL**                                           | **1316** | **1135** |  **426** |    **6** | **14%** |           |
+| **TOTAL**                                           | **1337** | **1150** |  **436** |    **6** | **14%** |           |
 
 
 ## Setup coverage badge
