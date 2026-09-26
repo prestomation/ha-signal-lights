@@ -12,6 +12,7 @@ from datetime import timedelta
 from typing import Any, Callable
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_call_later, async_track_template_result, TrackTemplate
 from homeassistant.helpers.template import Template
@@ -22,7 +23,7 @@ except ImportError:
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import DOMAIN, NOTIFY_TARGET_RE, CONF_CYCLE_INTERVAL, DEFAULT_CYCLE_INTERVAL
-from .engine import Signal, LightConfig, SignalEngine
+from .engine import Signal, LightConfig, SignalEngine, should_activate_from_template
 from .store import SignalLightsStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,11 +61,33 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Signal cycling state
         self._cycle_index: int = 0
         self._cycle_cancel: Callable | None = None
+        # Event signals do not fire until Home Assistant has started
+        self._events_armed: bool = False
+        self._start_unsub: Callable | None = None
 
     async def async_setup(self) -> None:
         """Set up the engine from stored configuration and start template tracking."""
+        if self.hass.is_running:
+            # Integration added or reloaded while HA runs: arm now
+            self._events_armed = True
+        else:
+            # HA is starting: entities change from 'unknown' to their
+            # restored state. These changes must not fire event signals.
+            self._start_unsub = self.hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STARTED, self._on_ha_started
+            )
         self._load_engine_config()
         self._setup_template_listeners()
+
+    @callback
+    def _on_ha_started(self, _event: Any) -> None:
+        """Arm event signals after Home Assistant has started.
+
+        The template trackers already hold the current results, so only a
+        later change from false to true fires an event signal.
+        """
+        self._start_unsub = None
+        self._events_armed = True
 
     def _load_engine_config(self) -> None:
         """Load signals and lights from the store into the engine."""
@@ -141,8 +164,15 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         else:
                             self.engine.deactivate_signal(signal_name)
                     elif sig.trigger_type == "event":
-                        if is_truthy:
+                        if should_activate_from_template(
+                            sig.trigger_type, is_truthy, self._events_armed
+                        ):
                             self.engine.activate_signal(signal_name)
+                        elif is_truthy:
+                            _LOGGER.debug(
+                                "Signal '%s' ignored: Home Assistant is starting",
+                                signal_name,
+                            )
 
                 # Consolidate into a single task to avoid triple-scheduling
                 self.hass.async_create_task(self._flush())
@@ -491,6 +521,9 @@ class SignalLightsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_shutdown(self) -> None:
         """Clean up template listeners and cycle timer on shutdown."""
         self._cancel_cycle_timer()
+        if self._start_unsub is not None:
+            self._start_unsub()
+            self._start_unsub = None
         for unsub in self._template_unsubs:
             unsub.async_remove()
         self._template_unsubs.clear()
