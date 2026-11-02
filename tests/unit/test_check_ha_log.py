@@ -14,6 +14,7 @@ import pytest
 
 SCRIPT = Path(__file__).parents[2] / "scripts" / "check_ha_log.py"
 _spec = importlib.util.spec_from_file_location("check_ha_log", SCRIPT)
+assert _spec is not None and _spec.loader is not None
 check_ha_log = importlib.util.module_from_spec(_spec)
 sys.modules["check_ha_log"] = check_ha_log
 _spec.loader.exec_module(check_ha_log)
@@ -98,16 +99,27 @@ def test_docker_compose_prefix_is_accepted():
 @pytest.mark.parametrize(
     "message",
     [
-        "/config/custom_components/signal_lights/engine.py:10: RuntimeWarning: "
-        "coroutine 'foo' was never awaited",
-        "Task exception was never retrieved\nTraceback (most recent call last):\n"
-        '  File "/config/custom_components/signal_lights/coordinator.py", line 5',
-        "Executing <Task pending name='Task-9' coro=<run() running at "
-        "/config/custom_components/signal_lights/coordinator.py:55>> took 0.350 seconds",
-        "Unclosed client session client_session: <aiohttp.ClientSession> created "
-        "at /config/custom_components/signal_lights/x.py:3",
-        "The integration 'signal_lights' uses a deprecated call "
-        "(custom_components/signal_lights/__init__.py)",
+        (
+            "/config/custom_components/signal_lights/engine.py:10: RuntimeWarning: "
+            "coroutine 'foo' was never awaited"
+        ),
+        (
+            "Task exception was never retrieved\nTraceback (most recent call last):\n"
+            '  File "/config/custom_components/signal_lights/coordinator.py", line 5'
+        ),
+        (
+            "Executing <Task pending name='Task-9' coro=<run() running at "
+            "/config/custom_components/signal_lights/coordinator.py:55>> "
+            "took 0.350 seconds"
+        ),
+        (
+            "Unclosed client session client_session: <aiohttp.ClientSession> "
+            "created at /config/custom_components/signal_lights/x.py:3"
+        ),
+        (
+            "The integration 'signal_lights' uses a deprecated call "
+            "(custom_components/signal_lights/__init__.py)"
+        ),
     ],
 )
 def test_known_bad_patterns_for_our_domain_fail(message):
@@ -180,6 +192,7 @@ def _cli(tmp_path, log_text, *extra):
         [sys.executable, str(SCRIPT), "--domain", "signal_lights", *extra, str(log)],
         capture_output=True,
         text=True,
+        check=False,
     )
 
 
@@ -199,6 +212,7 @@ def test_cli_reads_stdin():
         input=BLOCKING_LOG,
         capture_output=True,
         text=True,
+        check=False,
     )
     assert result.returncode == 1
 

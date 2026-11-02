@@ -12,7 +12,6 @@ to the log.
 """
 
 import pytest
-
 from conftest import HA_URL
 
 ENTRY_ID = "signal_lights_test_entry"

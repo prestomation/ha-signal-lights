@@ -24,7 +24,8 @@ def test_blockbuster_finds_a_blocking_call():
     """Guard test: the fixture must be active, or the other tests prove nothing."""
 
     async def blocking() -> None:
-        time.sleep(0.01)
+        # The blocking call is the point of this test.
+        time.sleep(0.01)  # noqa: ASYNC251
 
     with pytest.raises(BlockingError):
         asyncio.run(blocking())
