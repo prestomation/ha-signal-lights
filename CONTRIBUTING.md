@@ -77,7 +77,8 @@ callbacks, unclosed resources, deprecation notices). The container runs with
 each service so that the log has a chance to show a problem.
 
 If a message is expected, add a regular expression and a reason comment to
-`scripts/ha_log_allowlist.txt`. An entry without a reason is rejected.
+`scripts/ha_log_allowlist.txt`. An entry without a reason is rejected. An entry applies to every rule of the
+gate, so keep it narrow: match the logger name or the full message.
 
 ### Run everything (except integration)
 ```bash

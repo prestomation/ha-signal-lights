@@ -14,7 +14,6 @@ to the log.
 import pytest
 from conftest import HA_URL
 
-ENTRY_ID = "signal_lights_test_entry"
 FLOW_URL = f"{HA_URL}/api/config/config_entries/options/flow"
 
 
@@ -87,17 +86,17 @@ def test_every_service_once(ws, unique_name):
         result = ws.call_service("signal_lights", service, data or {})
         assert result["success"], f"{service} failed: {result}"
 
-    call("add_light", {"entity_id": light, "brightness": 100})
-    call("add_signal", {
-        "name": name,
-        "color": [1, 2, 3],
-        "trigger_type": "event",
-        "trigger_mode": "entity_equals",
-        "trigger_config": {"entity_id": "binary_sensor.surface", "state": "on"},
-        "template": "",
-        "duration": 30,
-    })
     try:
+        call("add_light", {"entity_id": light, "brightness": 100})
+        call("add_signal", {
+            "name": name,
+            "color": [1, 2, 3],
+            "trigger_type": "event",
+            "trigger_mode": "entity_equals",
+            "trigger_config": {"entity_id": "binary_sensor.surface", "state": "on"},
+            "template": "",
+            "duration": 30,
+        })
         call("update_signal", {
             "name": name,
             "color": [3, 2, 1],

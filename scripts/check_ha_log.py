@@ -32,6 +32,10 @@ Home Assistant's own generic warnings are ignored (see GENERIC_IGNORES).
 For anything else, add an entry to the allowlist file. Each entry is a
 regular expression on its own line, and the line before it must be a
 comment that gives the reason. Entries without a reason are rejected.
+
+An allowlist regex is checked against every record and hides it from all
+the rules above. Keep each entry narrow: match the logger name or the full
+message, not a short word like "timeout".
 """
 
 from __future__ import annotations
