@@ -221,3 +221,106 @@ def test_cli_bad_allowlist_exits_2(tmp_path):
     allow = tmp_path / "allow.txt"
     allow.write_text("no reason here\n")
     assert _cli(tmp_path, CLEAN_LOG, "--allowlist", str(allow)).returncode == 2
+
+
+# ---------------------------------------------------------------------------
+# Realistic log text: compose prefix, colour codes, tracebacks
+# ---------------------------------------------------------------------------
+
+PREFIX = "homeassistant-1  | "
+
+REAL_BLOCKING_LINE = (
+    "2026-11-02 10:00:05.200 WARNING (MainThread) [homeassistant.util.loop] "
+    "Detected blocking call to open with args "
+    "(PosixPath('/config/custom_components/signal_lights/manifest.json'),) "
+    "inside the event loop by custom integration 'signal_lights' at "
+    "custom_components/signal_lights/diagnostics.py, line 34: "
+    "manifest_data = json.loads(manifest_path.read_text(encoding=\"utf-8\")) "
+    "(offender: /usr/local/lib/python3.13/pathlib/_local.py, line 546: "
+    "return f.read()), please create a bug report at "
+    "https://github.com/prestomation/ha-signal-lights/issues"
+)
+
+REAL_COMPOSE_LOG = "\n".join(
+    PREFIX + line
+    for line in [
+        "s6-rc: info: service s6rc-oneshot-runner: starting",
+        "2026-11-02 10:00:00.100 INFO (MainThread) [homeassistant.bootstrap] Starting Home Assistant",
+        "2026-11-02 10:00:01.000 WARNING (SyncWorker_3) [homeassistant.loader] We found a custom integration signal_lights which has not been tested by Home Assistant.",
+        REAL_BLOCKING_LINE,
+        "Traceback (most recent call last):",
+        '  File "/config/custom_components/signal_lights/diagnostics.py", line 34, in async_get_config_entry_diagnostics',
+        "    manifest_data = json.loads(manifest_path.read_text(encoding=\"utf-8\"))",
+        "2026-11-02 10:00:06.000 INFO (MainThread) [homeassistant.components.http] Request done",
+    ]
+)
+
+
+def test_real_compose_log_is_parsed():
+    records = check_ha_log.parse_records(REAL_COMPOSE_LOG.splitlines())
+    levels = [r.level for r in records]
+    # The s6 line has no level. The other four are records.
+    assert levels == [None, "INFO", "WARNING", "WARNING", "INFO"]
+    assert records[3].logger == "homeassistant.util.loop"
+    # The traceback lines belong to the blocking-call record.
+    assert "manifest_path.read_text" in records[3].text
+    assert "Traceback" in records[3].text
+
+
+def test_real_compose_log_finds_the_blocking_call():
+    findings = run(REAL_COMPOSE_LOG)
+    assert len(findings) == 1
+    assert "blocking call" in findings[0].rule
+    assert "diagnostics.py, line 34" in findings[0].text
+
+
+def test_colour_codes_are_removed():
+    log = f"{PREFIX}\x1b[33m{REAL_BLOCKING_LINE}\x1b[0m\n"
+    assert len(run(log)) == 1
+
+
+def test_compose_prefix_with_colour_codes_is_removed():
+    log = f"\x1b[36mhomeassistant-1  |\x1b[0m {REAL_BLOCKING_LINE}\n"
+    assert len(run(log)) == 1
+
+
+@pytest.mark.parametrize(
+    "stamp",
+    [
+        "2026-11-02T10:00:05.200",
+        "2026-11-02T10:00:05.200Z",
+        "2026-11-02 10:00:05.200+00:00",
+        "2026-11-02 10:00:05",
+    ],
+)
+def test_other_timestamp_forms(stamp):
+    log = f"{stamp} ERROR (MainThread) [custom_components.signal_lights] boom\n"
+    assert len(run(log)) == 1
+
+
+def test_prefix_forms():
+    line = "2026-11-02 10:00:05.200 ERROR (MainThread) [custom_components.signal_lights] boom"
+    for prefix in ("ha-1 | ", "ha_test.1  |", "homeassistant  | "):
+        assert len(run(prefix + line + "\n")) == 1
+
+
+def test_cli_prints_log_sample_when_no_records(tmp_path):
+    lines = [f"unknown format line {i} " + "x" * 300 for i in range(40)]
+    result = _cli(tmp_path, "\n".join(lines) + "\n")
+    assert result.returncode == 2
+    assert "no Home Assistant log records found" in result.stderr
+    assert "unknown format line 0 " in result.stderr
+    assert "unknown format line 14 " in result.stderr
+    assert "unknown format line 15 " not in result.stderr
+    assert "unknown format line 24 " not in result.stderr
+    assert "unknown format line 39 " in result.stderr
+    # Every shown line is cut to 200 characters (plus the "  | " lead).
+    shown = [ln for ln in result.stderr.splitlines() if ln.startswith("  | ")]
+    assert len(shown) == 30
+    assert all(len(ln) <= 5 + 200 for ln in shown)
+
+
+def test_cli_empty_log_exits_2_without_sample_lines(tmp_path):
+    result = _cli(tmp_path, "")
+    assert result.returncode == 2
+    assert "no Home Assistant log records found" in result.stderr

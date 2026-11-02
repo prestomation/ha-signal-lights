@@ -48,13 +48,22 @@ from pathlib import Path
 
 DEFAULT_ALLOWLIST = Path(__file__).with_name("ha_log_allowlist.txt")
 
-# Start of a Home Assistant log record. Docker compose may add a prefix
-# such as "homeassistant-1  | " before the date.
+# Home Assistant may colour its log lines, even when the output is not a
+# terminal. Remove the colour codes before matching.
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+# Docker compose adds "<service>-<n>  | " in front of every line.
+COMPOSE_PREFIX = re.compile(r"^[\w.-]+\s*\|\s?")
+
+# Start of a Home Assistant log record:
+#   2026-11-02 10:00:00.123 WARNING (MainThread) [logger.name] message
+# The date and time may be split by "T" and may end with a time zone.
 RECORD_START = re.compile(
-    r"^(?:\S+\s+\|\s+)?"
-    r"(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+"
+    r"^\s*"
+    r"(?P<ts>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?"
+    r"(?:Z|[+-]\d{2}:?\d{2})?)\s+"
     r"(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL)\s+"
-    r"\((?P<thread>[^)]*)\)\s+"
+    r"(?:\((?P<thread>[^)]*)\)\s+)?"
     r"\[(?P<logger>[^\]]+)\]"
 )
 
@@ -97,11 +106,17 @@ class Finding:
     text: str
 
 
+def clean_line(raw: str) -> str:
+    """Remove colour codes and the compose prefix from one log line."""
+    line = ANSI.sub("", raw.rstrip("\n"))
+    return COMPOSE_PREFIX.sub("", line, count=1)
+
+
 def parse_records(lines: list[str]) -> list[Record]:
     """Group log lines into records. Lines before the first record are kept."""
     records: list[Record] = []
     for number, raw in enumerate(lines, start=1):
-        line = raw.rstrip("\n")
+        line = clean_line(raw)
         match = RECORD_START.match(line)
         if match:
             records.append(
@@ -177,6 +192,22 @@ def check_records(
     return findings
 
 
+def print_log_sample(lines: list[str], count: int = 15, width: int = 200) -> None:
+    """Show the first and last lines, so a CI run shows the real log format."""
+
+    def show(line: str) -> str:
+        # Escape control characters, so colour codes are visible.
+        return line[:width].encode("unicode_escape").decode("ascii")
+
+    print(f"log has {len(lines)} lines. First {count}:", file=sys.stderr)
+    for line in lines[:count]:
+        print(f"  | {show(line)}", file=sys.stderr)
+    if len(lines) > count:
+        print(f"Last {count}:", file=sys.stderr)
+        for line in lines[-count:]:
+            print(f"  | {show(line)}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--domain", required=True, help="integration domain")
@@ -214,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     if not any(r.level for r in records):
         # An empty or wrong log must not pass the gate.
         print("error: no Home Assistant log records found", file=sys.stderr)
+        print_log_sample(lines)
         return 2
 
     findings = check_records(records, args.domain, allowlist)
