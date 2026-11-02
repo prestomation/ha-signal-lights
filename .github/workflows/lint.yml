@@ -24,8 +24,19 @@ jobs:
         run: |
           find custom_components -name "*.py" -exec python -m py_compile {} +
 
+      # Only the async rules run here. They find blocking calls (file reads,
+      # time.sleep, requests) inside "async def". Other ruff rules are not
+      # enforced yet.
+      - name: Ruff async rules
+        run: ruff check --select ASYNC .
+
       - name: Run unit tests
         run: python -m pytest tests/test_engine.py -v
+
+      # Runs the code in an event loop with blockbuster. Blocking calls
+      # fail the test. The log gate script tests are in the same folder.
+      - name: Run unit tests that load the integration
+        run: python -m pytest tests/unit -v
 
       - name: Run hassfest
         uses: "home-assistant/actions/hassfest@master"

@@ -64,6 +64,21 @@ Integration tests talk to HA over both REST and the WebSocket API
 card uses, so service errors and `signal_lights/config` / `subscribe`
 behavior are exercised exactly as the card sees them.
 
+### Home Assistant log gate
+
+The integration workflow saves the Home Assistant container log (`ha.log`,
+uploaded as the `ha-log` artifact) and runs `scripts/check_ha_log.py` on it as
+the last step. The check fails on warnings or errors from
+`custom_components.signal_lights`, on "Detected blocking call" lines that name
+the integration, and on known bad patterns (never-awaited coroutines, slow
+callbacks, unclosed resources, deprecation notices). The container runs with
+`PYTHONDEVMODE=1` and `PYTHONASYNCIODEBUG=1` so that these show in the log.
+`tests/integration/test_surfaces.py` calls diagnostics, the options flow and
+each service so that the log has a chance to show a problem.
+
+If a message is expected, add a regular expression and a reason comment to
+`scripts/ha_log_allowlist.txt`. An entry without a reason is rejected.
+
 ### Run everything (except integration)
 ```bash
 python -m pytest tests/test_engine.py -v && npm test && find custom_components -name "*.py" -exec python -m py_compile {} +
@@ -78,6 +93,9 @@ All CI workflows call scripts from `scripts/` — you can run the same checks lo
 | Python unit tests | `python -m pytest tests/test_engine.py -v` |
 | JS unit tests | `npm test` |
 | Compile check | `find custom_components -name "*.py" -exec python -m py_compile {} +` |
+| Async lint (blocking calls in `async def`) | `ruff check --select ASYNC .` |
+| Unit tests that load the integration (fail on blocking calls in the event loop, via `blockbuster`) | `python -m pytest tests/unit -v` |
+| Home Assistant log gate (after integration tests) | `docker compose -f tests/integration/docker-compose.yml logs --no-color homeassistant > ha.log; python scripts/check_ha_log.py --domain signal_lights ha.log` |
 | Integration tests | See above (Docker required) |
 | HACS validation | Runs HACS action (CI only) |
 | hassfest validation | Runs hassfest (CI only, but `python -m script.hassfest` works locally with HA dev env) |

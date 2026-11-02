@@ -8,5 +8,11 @@ services:
       - ../../custom_components:/config/custom_components:ro
     environment:
       - TZ=America/New_York
+      # Python dev mode: log never-awaited coroutines, unclosed resources and
+      # other mistakes that Python hides by default.
+      - PYTHONDEVMODE=1
+      # asyncio debug mode: log callbacks and tasks that block the loop for
+      # more than 100 ms ("Executing <Task ...> took N seconds").
+      - PYTHONASYNCIODEBUG=1
     tmpfs:
       - /tmp

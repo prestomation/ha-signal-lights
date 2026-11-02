@@ -25,8 +25,14 @@ custom_components/signal_lights/
 ├── strings.json         # UI strings
 └── translations/en.json # English translations
 
+scripts/
+├── check_ha_log.py                   # Log gate for the HA container log (stdlib only)
+├── ha_log_allowlist.txt              # Allowed log messages, each with a reason
+└── wait-for-ha.sh
+
 tests/
 ├── test_engine.py                    # Unit tests (pure Python)
+├── unit/                             # Unit tests; conftest.py enables blockbuster
 └── integration/
     ├── conftest.py                   # Docker HA bootstrap helpers
     ├── docker-compose.yml            # HA container for tests
@@ -35,7 +41,8 @@ tests/
     │   └── .storage/
     │       ├── core.config_entries   # Pre-seeded config entry
     │       └── signal_lights         # Pre-seeded test signals
-    └── test_lifecycle.py             # Integration tests
+    ├── test_lifecycle.py             # Integration tests
+    └── test_surfaces.py              # Touches diagnostics, options flow, each service
 ```
 
 ## Key Design Decisions
