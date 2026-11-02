@@ -67,6 +67,9 @@ RECORD_START = re.compile(
     r"\[(?P<logger>[^\]]+)\]"
 )
 
+# Longest message shape that is used to group findings.
+SHAPE_WIDTH = 140
+
 BAD_LEVELS = {"WARNING", "ERROR", "CRITICAL"}
 
 # Patterns that are a problem when the record also names the domain.
@@ -104,6 +107,27 @@ class Finding:
     line_no: int
     rule: str
     text: str
+
+    @property
+    def message(self) -> str:
+        """First line of the record, without date, level and thread."""
+        first = self.text.splitlines()[0] if self.text else ""
+        match = RECORD_START.match(first)
+        return first[match.start("logger") - 1 :].strip() if match else first.strip()
+
+    @property
+    def shape(self) -> str:
+        """The message with names and numbers removed, to group like findings."""
+        text = re.sub(r"'[^']*'", "'*'", self.message)
+        text = re.sub(r"\d+", "N", text)
+        return text[:SHAPE_WIDTH]
+
+
+@dataclass
+class Group:
+    rule: str
+    shape: str
+    findings: list[Finding]
 
 
 def clean_line(raw: str) -> str:
@@ -192,6 +216,36 @@ def check_records(
     return findings
 
 
+def group_findings(findings: list[Finding]) -> list[Group]:
+    """Group findings by rule and message shape. Biggest group first."""
+    groups: dict[tuple[str, str], Group] = {}
+    for finding in findings:
+        key = (finding.rule, finding.shape)
+        groups.setdefault(key, Group(finding.rule, finding.shape, [])).findings.append(
+            finding
+        )
+    # sorted() is stable, so groups of the same size keep the log order.
+    return sorted(groups.values(), key=lambda g: -len(g.findings))
+
+
+def format_report(findings: list[Finding], example_count: int = 2) -> str:
+    """Build the report: a summary of groups first, then every finding."""
+    groups = group_findings(findings)
+    lines = [f"Summary: {len(findings)} problem(s) in {len(groups)} group(s)", ""]
+    for number, group in enumerate(groups, start=1):
+        lines.append(f"{number}. {len(group.findings)} x {group.rule}")
+        lines.append(f"   shape: {group.shape}")
+        for example in group.findings[:example_count]:
+            lines.append(f"   e.g. line {example.line_no}: {example.message[:200]}")
+        lines.append("")
+    lines.append("Details:")
+    for finding in findings:
+        lines.append(f"line {finding.line_no}: {finding.rule}")
+        for text_line in finding.text.splitlines()[:6]:
+            lines.append(f"    {text_line}")
+    return "\n".join(lines)
+
+
 def print_log_sample(lines: list[str], count: int = 15, width: int = 200) -> None:
     """Show the first and last lines, so a CI run shows the real log format."""
 
@@ -249,11 +303,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     findings = check_records(records, args.domain, allowlist)
-    for finding in findings:
-        print(f"line {finding.line_no}: {finding.rule}")
-        for text_line in finding.text.splitlines()[:6]:
-            print(f"    {text_line}")
     if findings:
+        print(format_report(findings))
         print(
             f"\n{len(findings)} problem(s) found for '{args.domain}'. "
             "Fix them, or add a reason and a pattern to the allowlist.",

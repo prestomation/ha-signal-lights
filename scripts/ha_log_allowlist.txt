@@ -9,3 +9,10 @@
 #
 # Reason: the test config uses a fake light that does not exist.
 # Light light\.does_not_exist is unavailable
+
+# The integration tests add signals for entities that do not exist, on
+# purpose (for example binary_sensor.front_door). The integration logs a
+# warning for this, and that is the wanted behaviour. The pattern names the
+# logger, the test signal prefix "itest_" and the full message, so warnings
+# for real signals and all other messages are still reported.
+\[custom_components\.signal_lights\.services\] Signal Lights: entity '[\w.]+' used in signal 'itest_\w+' does not currently exist \(it may appear later\)

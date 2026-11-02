@@ -76,9 +76,17 @@ callbacks, unclosed resources, deprecation notices). The container runs with
 `tests/integration/test_surfaces.py` calls diagnostics, the options flow and
 each service so that the log has a chance to show a problem.
 
+How to read the output: the gate prints a summary first. Each group has a
+count, the rule that matched, the message with names and numbers replaced by
+`'*'` and `N`, and the first two examples. The full list of findings follows
+under "Details", with the log line number of each. Exit code 1 means findings,
+2 means the log had no Home Assistant records (the gate then prints the first
+and last lines of the file so you can see the format).
+
 If a message is expected, add a regular expression and a reason comment to
-`scripts/ha_log_allowlist.txt`. An entry without a reason is rejected. An entry applies to every rule of the
-gate, so keep it narrow: match the logger name or the full message.
+`scripts/ha_log_allowlist.txt`: first a comment line with the reason, then the
+regular expression on the next line. An entry without a reason is rejected.
+An entry applies to every rule of the gate, so keep it narrow: match the logger name or the full message.
 
 ### Run everything (except integration)
 ```bash

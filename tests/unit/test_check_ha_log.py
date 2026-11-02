@@ -324,3 +324,101 @@ def test_cli_empty_log_exits_2_without_sample_lines(tmp_path):
     result = _cli(tmp_path, "")
     assert result.returncode == 2
     assert "no Home Assistant log records found" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Real lines from the Docker job: allowlist entry and grouped output
+# ---------------------------------------------------------------------------
+
+def _missing_entity_line(signal: str, stamp: str = "10:00:07.000") -> str:
+    return (
+        f"2026-11-02 {stamp} WARNING (MainThread) "
+        "[custom_components.signal_lights.services] Signal Lights: entity "
+        f"'binary_sensor.front_door' used in signal '{signal}' does not "
+        "currently exist (it may appear later)"
+    )
+
+
+def _real_blocking_line(call: str) -> str:
+    return REAL_BLOCKING_LINE.replace("to open with", f"to {call} with")
+
+
+SHIPPED_ALLOWLIST = check_ha_log.load_allowlist(SCRIPT.with_name("ha_log_allowlist.txt"))
+
+REAL_JOB_LOG = "\n".join(
+    PREFIX + line
+    for line in [
+        "2026-11-02 10:00:00.100 INFO (MainThread) [homeassistant.bootstrap] Starting Home Assistant",
+        _missing_entity_line("itest_1a2b3c4d"),
+        _missing_entity_line("itest_1a2b3c4d_a"),
+        _missing_entity_line("itest_ffffffff"),
+        _real_blocking_line("read_text"),
+        _real_blocking_line("open"),
+    ]
+)
+
+
+def test_allowlist_hides_the_missing_entity_warning():
+    findings = run(REAL_JOB_LOG, allowlist=SHIPPED_ALLOWLIST)
+    assert len(findings) == 2
+    assert all("blocking call" in f.rule for f in findings)
+
+
+def test_allowlist_does_not_hide_blocking_calls():
+    findings = run(_real_blocking_line("open"), allowlist=SHIPPED_ALLOWLIST)
+    assert len(findings) == 1
+
+
+def test_allowlist_is_narrow():
+    # A real signal (no "itest_" prefix) is still reported.
+    real = _missing_entity_line("front_door_open")
+    assert len(run(real, allowlist=SHIPPED_ALLOWLIST)) == 1
+    # Another message from the same logger is still reported.
+    other = (
+        "2026-11-02 10:00:07.000 WARNING (MainThread) "
+        "[custom_components.signal_lights.services] Signal Lights: light "
+        "'light.x' used in signal 'itest_1a2b3c4d' failed"
+    )
+    assert len(run(other, allowlist=SHIPPED_ALLOWLIST)) == 1
+    # Another logger with similar text is still reported.
+    assert len(run(real.replace("services", "engine"), allowlist=SHIPPED_ALLOWLIST)) == 1
+
+
+def test_findings_are_grouped_by_rule_and_shape():
+    findings = run(REAL_JOB_LOG)
+    groups = check_ha_log.group_findings(findings)
+    assert [len(g.findings) for g in groups] == [3, 1, 1]
+    # The three missing-entity warnings differ only in the signal name.
+    assert "itest_" not in groups[0].shape
+    assert groups[0].rule.startswith("WARNING from logger")
+    # read_text and open are different shapes.
+    assert groups[1].shape != groups[2].shape
+
+
+def test_report_has_summary_counts_examples_and_details():
+    report = check_ha_log.format_report(run(REAL_JOB_LOG))
+    summary, details = report.split("Details:")
+    assert "5 problem(s) in 3 group(s)" in summary
+    assert "1. 3 x WARNING from logger" in summary
+    # Only the first two examples are shown for a group of three.
+    assert summary.count("itest_1a2b3c4d_a") == 1
+    assert "itest_ffffffff" not in summary
+    # The details list every finding.
+    starts = [ln for ln in details.splitlines() if ln.startswith("line ")]
+    assert len(starts) == 5
+    assert "itest_ffffffff" in details
+    assert "diagnostics.py, line 34" in details
+
+
+def test_cli_with_shipped_allowlist_leaves_only_blocking_calls(tmp_path):
+    log = tmp_path / "ha.log"
+    log.write_text(REAL_JOB_LOG + "\n")
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--domain", "signal_lights", str(log)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "2 problem(s) in 2 group(s)" in result.stdout
+    assert "does not currently exist" not in result.stdout
