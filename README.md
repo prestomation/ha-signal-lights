@@ -4,18 +4,18 @@
 
 | Name                                                |    Stmts |     Miss |   Branch |   BrPart |   Cover |   Missing |
 |---------------------------------------------------- | -------: | -------: | -------: | -------: | ------: | --------: |
-| custom\_components/signal\_lights/\_\_init\_\_.py   |      108 |      108 |       32 |        0 |      0% |    20-189 |
+| custom\_components/signal\_lights/\_\_init\_\_.py   |      108 |       80 |       32 |        0 |     20% |50, 55-62, 66-71, 75-78, 81-88, 91-93, 96-113, 119-129, 136-137, 143-167, 172-189 |
 | custom\_components/signal\_lights/binary\_sensor.py |       24 |       24 |        2 |        0 |      0% |      7-55 |
 | custom\_components/signal\_lights/config\_flow.py   |      235 |      235 |       94 |        0 |      0% |     8-709 |
-| custom\_components/signal\_lights/const.py          |       11 |       11 |        0 |        0 |      0% |      3-21 |
-| custom\_components/signal\_lights/coordinator.py    |      240 |      240 |       74 |        0 |      0% |     7-545 |
-| custom\_components/signal\_lights/diagnostics.py    |       24 |       24 |        0 |        0 |      0% |      3-42 |
+| custom\_components/signal\_lights/const.py          |       11 |        0 |        0 |        0 |    100% |           |
+| custom\_components/signal\_lights/coordinator.py    |      240 |      192 |       74 |        0 |     15% |21-22, 45-66, 70-80, 89-90, 94-117, 121-187, 195-198, 202, 208-210, 215-225, 233-309, 315-338, 345-355, 361-387, 398-416, 430-455, 471-477, 482-486, 490-493, 497-500, 504-505, 510, 514, 523-529, 534-540, 545 |
+| custom\_components/signal\_lights/diagnostics.py    |       18 |        0 |        0 |        0 |    100% |           |
 | custom\_components/signal\_lights/engine.py         |      195 |        8 |       74 |        6 |     95% |29, 40, 65, 72, 81, 90, 232, 237 |
 | custom\_components/signal\_lights/sensor.py         |       55 |       55 |        8 |        0 |      0% |     9-116 |
-| custom\_components/signal\_lights/services.py       |      270 |      270 |      106 |        0 |      0% |     3-655 |
-| custom\_components/signal\_lights/store.py          |      122 |      122 |       36 |        0 |      0% |    29-258 |
-| custom\_components/signal\_lights/websocket.py      |       53 |       53 |       10 |        0 |      0% |     2-159 |
-| **TOTAL**                                           | **1337** | **1150** |  **436** |    **6** | **14%** |           |
+| custom\_components/signal\_lights/services.py       |      270 |      232 |      106 |        0 |     10% |32-34, 39-44, 49-54, 193-224, 241-262, 274-288, 297-302, 307-640, 650-655 |
+| custom\_components/signal\_lights/store.py          |      122 |       95 |       36 |        0 |     17% |53-56, 66-77, 81-124, 132, 140, 144-145, 149-156, 160-167, 175, 179-180, 185-193, 197-206, 210-217, 221-231, 235-236, 240-243, 251, 257-258 |
+| custom\_components/signal\_lights/websocket.py      |       53 |       36 |       10 |        0 |     27% |18-19, 39-63, 82-84, 114-159 |
+| **TOTAL**                                           | **1331** |  **957** |  **436** |    **6** | **25%** |           |
 
 
 ## Setup coverage badge
