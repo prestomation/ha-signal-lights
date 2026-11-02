@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.3.2] - 2026-11-02
+
+### Fixed
+- Downloading diagnostics for Signal Lights no longer triggers a Home Assistant
+  warning about slow operations in the log.
+
 ## [1.3.1] - 2026-10-26
 
 ### Fixed

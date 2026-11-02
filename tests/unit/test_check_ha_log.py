@@ -422,3 +422,21 @@ def test_cli_with_shipped_allowlist_leaves_only_blocking_calls(tmp_path):
     assert result.returncode == 1
     assert "2 problem(s) in 2 group(s)" in result.stdout
     assert "does not currently exist" not in result.stdout
+
+
+def test_cli_prints_the_final_line_last_in_one_stream(tmp_path):
+    log = tmp_path / "ha.log"
+    log.write_text(REAL_JOB_LOG + "\n")
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--domain", "signal_lights", str(log)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert result.stderr == ""
+    lines = result.stdout.rstrip("\n").splitlines()
+    assert lines[0].startswith("Summary:")
+    assert lines.index("Details:") < len(lines) - 1
+    assert lines[-1].endswith("Fix them, or add a reason and a pattern to the allowlist.")
+    assert "problem(s) found for 'signal_lights'" in lines[-1]

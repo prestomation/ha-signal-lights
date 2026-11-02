@@ -20,7 +20,7 @@ dev = [
     "ruff==0.16.9",
     # Unit tests import the integration, so they need Home Assistant itself.
     "homeassistant>=2024.1",
-    # Fails a test when code blocks the event loop (see tests/conftest.py).
+    # Fails a test when code blocks the event loop (see tests/unit/conftest.py).
     "blockbuster>=1.5",
 ]
 

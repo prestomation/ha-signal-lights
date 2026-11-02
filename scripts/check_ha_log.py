@@ -305,10 +305,10 @@ def main(argv: list[str] | None = None) -> int:
     findings = check_records(records, args.domain, allowlist)
     if findings:
         print(format_report(findings))
+        # Same stream as the report, so the order of the output is stable.
         print(
             f"\n{len(findings)} problem(s) found for '{args.domain}'. "
-            "Fix them, or add a reason and a pattern to the allowlist.",
-            file=sys.stderr,
+            "Fix them, or add a reason and a pattern to the allowlist."
         )
         return 1
     print(f"OK: no problems found for '{args.domain}' in {len(records)} records")
