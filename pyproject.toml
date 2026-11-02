@@ -17,6 +17,8 @@ dev = [
     "pytest-timeout>=2.0",
     "requests>=2.31",
     "websocket-client>=1.7",
+    # Unit tests import the integration, so they need Home Assistant itself.
+    "homeassistant>=2024.1",
 ]
 
 [tool.pytest.ini_options]
