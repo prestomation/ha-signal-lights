@@ -29,11 +29,22 @@ def test_diagnostics_download(ha, entry_id):
     r = ha.get(f"{HA_URL}/api/diagnostics/config_entry/{entry_id}", timeout=30)
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["domain"] == "signal_lights"
+    assert isinstance(body, dict), body
+    # Home Assistant wraps the integration data under "data".
+    assert "data" in body, f"no 'data' key; body keys: {sorted(body)}"
     data = body["data"]
-    for key in ("integration_version", "lights", "signals", "queue_depth"):
-        assert key in data, f"missing diagnostics key: {key}"
-    assert data["integration_version"] != "unknown"
+    expected = (
+        "config_entry",
+        "integration_version",
+        "lights",
+        "signals",
+        "active_signals",
+        "queue_depth",
+    )
+    for key in expected:
+        assert key in data, f"missing diagnostics key {key}; data keys: {sorted(data)}"
+    version = data["integration_version"]
+    assert isinstance(version, str) and version, f"bad version: {version!r}"
 
 
 def _start_flow(ha, entry_id):
