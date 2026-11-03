@@ -17,8 +17,11 @@ dev = [
     "pytest-timeout>=2.0",
     "requests>=2.31",
     "websocket-client>=1.7",
+    "ruff==0.16.9",
     # Unit tests import the integration, so they need Home Assistant itself.
     "homeassistant>=2024.1",
+    # Fails a test when code blocks the event loop (see tests/unit/conftest.py).
+    "blockbuster>=1.5",
 ]
 
 [tool.pytest.ini_options]
@@ -32,3 +35,8 @@ relative_files = true
 
 [tool.coverage.report]
 show_missing = true
+
+[tool.ruff.lint]
+# Keep ruff's default rules and add the async rules. ASYNC finds blocking
+# calls (open, time.sleep, requests, Path methods) inside "async def".
+extend-select = ["ASYNC"]
