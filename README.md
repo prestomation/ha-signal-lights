@@ -31,10 +31,12 @@ A Home Assistant custom integration that manages a **priority queue of colored l
 
 ### HACS (Recommended)
 
-1. Add this repository as a custom repository in HACS
-2. Search for "Signal Lights" and install
-3. Restart Home Assistant
-4. Go to Settings → Devices & Services → Add Integration → Signal Lights
+Signal Lights is in the [HACS](https://hacs.xyz/) default list:
+
+1. In HACS, search for "Signal Lights", or
+   [open it in HACS](https://my.home-assistant.io/redirect/hacs_repository/?owner=prestomation&repository=ha-signal-lights&category=integration).
+2. Download Signal Lights and restart Home Assistant.
+3. Go to Settings → Devices & Services → Add Integration → Signal Lights
 
 ### Manual
 
@@ -160,8 +162,8 @@ MIT — see [LICENSE](LICENSE).
 [integration-usage]: https://analytics.home-assistant.io/custom_integrations.json
 [commits-shield]: https://img.shields.io/github/last-commit/prestomation/ha-signal-lights?style=for-the-badge
 [commits]: https://github.com/prestomation/ha-signal-lights/commits/main
-[hacs]: https://github.com/custom-components/hacs
-[hacsbadge]: https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge
+[hacs]: https://github.com/hacs/integration
+[hacsbadge]: https://img.shields.io/badge/HACS-Default-41BDF5.svg?style=for-the-badge
 [license-shield]: https://img.shields.io/github/license/prestomation/ha-signal-lights.svg?style=for-the-badge
 [maintenance-shield]: https://img.shields.io/badge/Maintainers-%40prestomation-blue.svg?style=for-the-badge
 [downloads-shield]: https://img.shields.io/github/downloads/prestomation/ha-signal-lights/total.svg?style=for-the-badge
